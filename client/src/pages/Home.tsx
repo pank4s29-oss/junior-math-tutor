@@ -10,8 +10,9 @@ import { toast } from "sonner";
 import { startLogin } from "@/const";
 import { Link } from "wouter";
 
-type PendingAttachment = { file: File; preview: string; normalizedDataUrl: string; quality: PhotoQuality; attachmentId?: number };
-type LastAttempt = { id: number; variationQuestion: string; confidence: number; needsClarification: boolean };
+type PendingAttachment = { file: File; preview: string; normalizedDataUrl: string; quality: PhotoQuality; attachmentId?: string };
+type LastAttempt = { id: string; variationQuestion: string; confidence: number; needsClarification: boolean };
+type LearningAttempt = { id: string; questionText: string; confidence: number; errorTags: string; needsClarification: boolean };
 
 const MODE_DETAILS: Record<TutorMode, { description: string; icon: typeof Lightbulb }> = {
   guided: { description: "先給下一步提示，不急著揭露答案。", icon: Lightbulb },
@@ -77,7 +78,7 @@ export default function Home() {
 
   const units = useMemo(() => CORE_UNITS[grade], [grade]);
   const unit = units.find(item => item.key === unitKey) ?? units[0];
-  const history = trpc.tutor.learningLoop.useQuery(undefined, { enabled: isAuthenticated });
+  const history = trpc.tutor.learningLoop.useQuery(undefined, { enabled: isAuthenticated }) as unknown as { data?: LearningAttempt[]; isLoading: boolean; refetch: () => unknown };
   const uploadPhoto = trpc.tutor.uploadPhoto.useMutation();
   const recognizePhoto = trpc.tutor.recognizePhoto.useMutation();
   const solve = trpc.tutor.solve.useMutation();
@@ -152,7 +153,7 @@ export default function Home() {
     setMessages(current => [...current, { role: "user", content: question }]);
     setLastAttempt(null);
     try {
-      let attachmentId: number | undefined;
+      let attachmentId: string | undefined;
       if (attachment) attachmentId = await ensureAttachmentUploaded();
       const result = await solve.mutateAsync({ question, grade, unitKey: unit.key, mode, attachmentId });
       setMessages(current => [...current, { role: "assistant", content: result.responseMarkdown }]);

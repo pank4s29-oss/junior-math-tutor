@@ -25,3 +25,13 @@
 - [x] 建立新版檢查點並確認教師工作台、公式編輯器與手寫辨識已發布至正式網域
 - [x] 撰寫以 Supabase 為核心的資料庫建立、權限設計與 Vercel 連線移轉指南
 - [x] 將完整 Supabase 建置指南與初始 SQL 腳本納入專案文件供下載
+- [x] 將後端資料存取層改為 Supabase 伺服器端連線並保留安全的服務端金鑰界線
+- [x] 將教師工作台規則、教材與學生案件查詢改接 Supabase 並驗證角色權限
+- [x] 補齊 Supabase 連線與教師工作台資料讀取的自動化測試與發布前驗證
+- [x] 將解題紀錄、附件、每日用量、變式練習與教師案件讀寫全面移轉至 Supabase，移除教師工作台對 legacy MySQL 的依賴
+- [x] 建立現有登入帳號與 Supabase profile 的安全身分映射，並以 Supabase 角色保護教師工作台
+- [x] 補上非管理者拒絕、跨學生資料隔離與 Supabase 教師案件狀態更新的自動化測試
+- [x] 建立並驗證既有登入帳號與 Supabase auth.users／profile 的實際對應流程，於登入時寫入 supabase_auth_user_id
+- [x] 新增跨學生資料隔離自動化測試，驗證學生 A 不能讀取、辨識或引用學生 B 的附件、解題紀錄、練習與案件
+- [x] 在登入成功流程建立 Supabase Auth 對應，於 session 建立時寫入 app_users.supabase_auth_user_id
+- [x] 補上學生 A 引用學生 B conversationId 與 attemptId 時的完整隔離測試
