@@ -44,3 +44,6 @@
 - [x] 以 Gemini API 的伺服器端金鑰取代受管解題模型，建立結構化數學解題與手寫題目視覺辨識相容層
 - [x] 以 Supabase Auth Magic Link 取代受管 OAuth，並由伺服器驗證 JWT 與受保護 profile 角色
 - [ ] 選定並整合 Resend、Slack 或 LINE 的教師案件即時推播服務；目前案件已安全寫入教師工作台
+- [ ] 建立並驗證可在使用者本機獨立維護的交接流程：GitHub clone、環境變數、Supabase migration 與 Vercel Git 發布
+- [ ] 在乾淨目錄完成 GitHub clone、依賴安裝、環境範本複製與本機 API proxy 驗證
+- [ ] 提供可自動驗證 Vite proxy 至 Express tRPC 健康回應的本機檢查腳本
