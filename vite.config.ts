@@ -150,6 +150,9 @@ function vitePluginManusDebugCollector(): Plugin {
 }
 
 const plugins = [react(), tailwindcss(), jsxLocPlugin(), vitePluginManusDebugCollector()];
+const staticOutputDir = process.env.VERCEL
+  ? path.resolve(import.meta.dirname, "public")
+  : path.resolve(import.meta.dirname, "dist", "public");
 
 export default defineConfig({
   plugins,
@@ -164,9 +167,9 @@ export default defineConfig({
   root: path.resolve(import.meta.dirname, "client"),
   publicDir: path.resolve(import.meta.dirname, "client", "public"),
   build: {
-    // Vercel Express 專案會將根目錄 public/ 交由 CDN 提供；不可依賴
-    // Express static middleware 來供應前端檔案。
-    outDir: path.resolve(import.meta.dirname, "public"),
+    // Vercel 會將根目錄 public/ 交由 CDN 與 Express Function 使用；其餘
+    // 本機／受管建置仍輸出 dist/public，以相容預設發布流程。
+    outDir: staticOutputDir,
     emptyOutDir: true,
   },
   server: {

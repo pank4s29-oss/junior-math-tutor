@@ -48,3 +48,4 @@
 - [x] 在乾淨目錄完成 GitHub clone、依賴安裝、環境範本複製與本機 API proxy 驗證
 - [x] 提供可自動驗證 Vite proxy 至 Express tRPC 健康回應的本機檢查腳本
 - [x] 在乾淨 clone 中以唯讀方式驗證遠端 Supabase migration 的核心 schema、額度 RPC 與 Auth bootstrap trigger
+- [x] 依部署環境選擇 Vite 靜態輸出目錄，使 Vercel 使用 public 且受管預覽維持 dist/public
