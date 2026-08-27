@@ -8,6 +8,7 @@
     "dev:api": "tsx watch server/standalone.ts",
     "dev:client": "vite --host 127.0.0.1",
     "verify:local": "node scripts/verify-local-dev.mjs",
+    "verify:supabase": "node scripts/verify-supabase-migrations.mjs",
     "build": "vite build && esbuild server/_core/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist",
     "build:client": "vite build",
     "start": "NODE_ENV=production node dist/index.js",

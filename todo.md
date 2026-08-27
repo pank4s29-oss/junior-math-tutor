@@ -45,5 +45,6 @@
 - [x] 以 Supabase Auth Magic Link 取代受管 OAuth，並由伺服器驗證 JWT 與受保護 profile 角色
 - [ ] 選定並整合 Resend、Slack 或 LINE 的教師案件即時推播服務；目前案件已安全寫入教師工作台
 - [ ] 建立並驗證可在使用者本機獨立維護的交接流程：GitHub clone、環境變數、Supabase migration 與 Vercel Git 發布
-- [ ] 在乾淨目錄完成 GitHub clone、依賴安裝、環境範本複製與本機 API proxy 驗證
-- [ ] 提供可自動驗證 Vite proxy 至 Express tRPC 健康回應的本機檢查腳本
+- [x] 在乾淨目錄完成 GitHub clone、依賴安裝、環境範本複製與本機 API proxy 驗證
+- [x] 提供可自動驗證 Vite proxy 至 Express tRPC 健康回應的本機檢查腳本
+- [ ] 在乾淨 clone 中以唯讀方式驗證遠端 Supabase migration 的核心 schema、額度 RPC 與 Auth bootstrap trigger
