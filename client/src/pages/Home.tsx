@@ -1,5 +1,6 @@
 import { useAuth } from "@/_core/hooks/useAuth";
 import { AIChatBox, type Message, type PhotoQuality } from "@/components/AIChatBox";
+import { AuthDialog } from "@/components/AuthDialog";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { trpc } from "@/lib/trpc";
@@ -7,7 +8,6 @@ import { CORE_UNITS, GRADE_LABELS, MODE_LABELS, type Grade, type TutorMode } fro
 import { AlertCircle, ArrowRight, BadgeCheck, BookOpenCheck, CheckCircle2, CircleHelp, Clock3, FileWarning, GraduationCap, Lightbulb, Loader2, NotebookPen, ShieldCheck, Sparkles, Upload, UserRoundCheck } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { startLogin } from "@/const";
 import { Link } from "wouter";
 
 type PendingAttachment = { file: File; preview: string; normalizedDataUrl: string; quality: PhotoQuality; attachmentId?: string };
@@ -55,7 +55,11 @@ function prepareHandwrittenPhoto(file: File) {
       const quality: PhotoQuality = tooSmall || dimOrFlat
         ? { tone: "warning", message: tooSmall ? "照片解析度偏低，建議靠近題目補拍；仍可先嘗試辨識。" : "已自動提高對比，但光線或筆跡偏淡，請務必核對辨識稿。" }
         : { tone: "ready", message: "已自動校正尺寸與對比。請先辨識，再核對數字、分數線、根號與等號。" };
-      const normalizedDataUrl = canvas.toDataURL("image/jpeg", 0.9);
+      let normalizedDataUrl = canvas.toDataURL("image/jpeg", 0.84);
+      // Vercel Functions 的 request body 上限為 4.5MB；照片由瀏覽器預先壓縮，
+      // 為 tRPC metadata 保留餘裕，同時維持伺服器端 5MB 原始圖片安全上限。
+      if (normalizedDataUrl.length > 3_800_000) normalizedDataUrl = canvas.toDataURL("image/jpeg", 0.68);
+      if (normalizedDataUrl.length > 3_800_000) { URL.revokeObjectURL(objectUrl); reject(new Error("照片壓縮後仍偏大，請裁切至單一題目後再上傳。")); return; }
       URL.revokeObjectURL(objectUrl);
       resolve({ preview: normalizedDataUrl, normalizedDataUrl, quality });
     };
@@ -75,6 +79,7 @@ export default function Home() {
   const [lastAttempt, setLastAttempt] = useState<LastAttempt | null>(null);
   const [practiceAnswer, setPracticeAnswer] = useState("");
   const [remaining, setRemaining] = useState<number | null>(null);
+  const [authDialogOpen, setAuthDialogOpen] = useState(false);
 
   const units = useMemo(() => CORE_UNITS[grade], [grade]);
   const unit = units.find(item => item.key === unitKey) ?? units[0];
@@ -123,7 +128,7 @@ export default function Home() {
 
   const recognizeHandwriting = async () => {
     if (!attachment) return;
-    if (!isAuthenticated) { toast.message("請先登入，再使用手寫題目辨識與保存功能。"); startLogin(); return; }
+    if (!isAuthenticated) { toast.message("請先登入，再使用手寫題目辨識與保存功能。"); setAuthDialogOpen(true); return; }
     try {
       const attachmentId = await ensureAttachmentUploaded();
       if (!attachmentId) return;
@@ -147,7 +152,7 @@ export default function Home() {
   const sendQuestion = async (question: string) => {
     if (!isAuthenticated) {
       toast.message("請先登入，再開始保存你的解題與錯題紀錄。");
-      startLogin();
+      setAuthDialogOpen(true);
       return;
     }
     setMessages(current => [...current, { role: "user", content: question }]);
@@ -200,7 +205,7 @@ export default function Home() {
       <header className="sticky top-0 z-20 border-b border-white/70 bg-[#f7f8f5]/90 backdrop-blur-xl">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6 lg:px-8">
           <div className="flex items-center gap-3"><div className="flex size-10 items-center justify-center rounded-2xl bg-[#173b4d] text-[#f8cf88] shadow-lg shadow-[#173b4d]/15"><span className="font-serif text-xl font-semibold">∑</span></div><div><p className="text-sm font-bold tracking-tight text-[#173b4d]">數域・解題教練</p><p className="text-[11px] tracking-[0.14em] text-slate-500">JUNIOR MATH STUDIO</p></div></div>
-          {loading ? <Loader2 className="size-5 animate-spin text-slate-400" /> : isAuthenticated ? <div className="flex items-center gap-2"><>{user?.role === "admin" && <Link href="/teacher" className="hidden rounded-full bg-[#eaf6f3] px-3 py-1.5 text-xs font-semibold text-[#196b63] transition hover:bg-[#dff1ed] sm:inline">教師工作台</Link>}</><div className="flex items-center gap-2 rounded-full bg-white px-3 py-1.5 text-xs font-medium text-slate-600 shadow-sm ring-1 ring-slate-100"><UserRoundCheck className="size-3.5 text-[#196b63]" /><span className="hidden sm:inline">{user?.name || "我的學習空間"}</span><span className="sm:hidden">已登入</span></div></div> : <Button onClick={startLogin} size="sm" className="rounded-full bg-[#173b4d] px-4 text-xs hover:bg-[#0f2e3d]">登入學習空間</Button>}
+          {loading ? <Loader2 className="size-5 animate-spin text-slate-400" /> : isAuthenticated ? <div className="flex items-center gap-2"><>{(user?.role === "teacher" || user?.role === "admin") && <Link href="/teacher" className="hidden rounded-full bg-[#eaf6f3] px-3 py-1.5 text-xs font-semibold text-[#196b63] transition hover:bg-[#dff1ed] sm:inline">教師工作台</Link>}</><div className="flex items-center gap-2 rounded-full bg-white px-3 py-1.5 text-xs font-medium text-slate-600 shadow-sm ring-1 ring-slate-100"><UserRoundCheck className="size-3.5 text-[#196b63]" /><span className="hidden sm:inline">{user?.name || "我的學習空間"}</span><span className="sm:hidden">已登入</span></div></div> : <Button onClick={() => setAuthDialogOpen(true)} size="sm" className="rounded-full bg-[#173b4d] px-4 text-xs hover:bg-[#0f2e3d]">登入學習空間</Button>}
         </div>
       </header>
 
@@ -234,6 +239,7 @@ export default function Home() {
           </aside>
         </section>
       </main>
+      <AuthDialog open={authDialogOpen} onOpenChange={setAuthDialogOpen} />
     </div>
   );
 }

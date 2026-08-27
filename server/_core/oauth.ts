@@ -2,7 +2,6 @@ import { COOKIE_NAME, ONE_YEAR_MS, OAUTH_STATE_COOKIE, decodeOAuthState } from "
 import { parse as parseCookieHeader } from "cookie";
 import type { Express, Request, Response } from "express";
 import * as db from "../db";
-import { getOrCreateAppUser } from "../tutor/supabaseDb";
 import { getSessionCookieOptions } from "./cookies";
 import { sdk } from "./sdk";
 
@@ -48,19 +47,6 @@ export function registerOAuthRoutes(app: Express) {
         loginMethod: userInfo.loginMethod ?? userInfo.platform ?? null,
         lastSignedIn: new Date(),
       });
-
-      // Keep an existing application identity aligned with Supabase as soon as
-      // the account signs in. A transient Supabase failure must not prevent a
-      // legitimate account from reaching the login page; protected tutor routes
-      // retry the same idempotent mapping before accessing learning data.
-      const persistedUser = await db.getUserByOpenId(userInfo.openId);
-      if (persistedUser) {
-        try {
-          await getOrCreateAppUser(persistedUser);
-        } catch (mappingError) {
-          console.warn("[OAuth] Supabase identity mapping deferred", mappingError);
-        }
-      }
 
       const sessionToken = await sdk.createSessionToken(userInfo.openId, {
         name: userInfo.name || "",

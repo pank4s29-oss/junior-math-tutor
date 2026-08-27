@@ -14,4 +14,18 @@ describe("Supabase server connection", () => {
 
     expect(response.status).toBeLessThan(400);
   });
+
+  it("接受瀏覽器端登入所需的公開網址與 Publishable key", async () => {
+    const url = process.env.VITE_SUPABASE_URL;
+    const publishableKey = process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
+    expect(url).toMatch(/^https:\/\/[a-z0-9-]+\.supabase\.co\/?$/i);
+    expect(publishableKey).toBeTruthy();
+
+    const response = await fetch(`${url!.replace(/\/$/, "")}/auth/v1/settings`, {
+      headers: { apikey: publishableKey! },
+    });
+
+    expect(response.status).toBeLessThan(400);
+  });
 });

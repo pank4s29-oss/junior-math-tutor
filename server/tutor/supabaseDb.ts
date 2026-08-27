@@ -1,12 +1,12 @@
 import { nanoid } from "nanoid";
-import type { User } from "../../drizzle/schema";
 import type { Grade, TutorMode } from "../../shared/mathCurriculum";
-import { resolveSupabaseAuthUserId } from "../supabaseAuthBridge";
+import type { SupabaseAuthenticatedUser } from "../supabaseAuth";
 import { getSupabaseServerClient } from "../supabase";
 
 const DAILY_LIMIT = 20;
 const REQUEST_COOLDOWN_MS = 3500;
 const MATH_BUCKET = "math-problems";
+const SUPPORTED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
 
 type AppUser = { id: string; role: "student" | "teacher" | "admin" };
 type AnySupabase = any;
@@ -19,10 +19,6 @@ function fail(error: { message: string } | null, action: string): asserts error 
   if (error) throw new Error(`${action}失敗：${error.message}`);
 }
 
-function roleFor(user: User): AppUser["role"] {
-  return user.role === "admin" ? "admin" : "student";
-}
-
 export function evaluateSolveQuota(record: { requestCount: number; lastRequestedAt: Date } | undefined, now: Date) {
   if (!record) return { allowed: true, remaining: DAILY_LIMIT - 1, nextRequestCount: 1 };
   const elapsed = now.getTime() - record.lastRequestedAt.getTime();
@@ -31,29 +27,30 @@ export function evaluateSolveQuota(record: { requestCount: number; lastRequested
   return { allowed: true, remaining: DAILY_LIMIT - record.requestCount - 1, nextRequestCount: record.requestCount + 1 };
 }
 
-/** Maps an existing authenticated account to a stable Supabase UUID. */
-export async function getOrCreateAppUser(user: User): Promise<AppUser> {
+/** Maps a validated Supabase Auth account to its stable internal app UUID. */
+export async function getOrCreateAppUser(user: SupabaseAuthenticatedUser): Promise<AppUser> {
   const client = supabase();
-  const authUserId = await resolveSupabaseAuthUserId(user.email);
   const { data: existing, error: lookupError } = await client.from("app_users")
-    .select("id, role, supabase_auth_user_id").eq("legacy_user_id", user.id).maybeSingle();
+    .select("id, role").eq("supabase_auth_user_id", user.id).maybeSingle();
   fail(lookupError, "讀取 Supabase 使用者身分映射");
-  const base = { legacy_open_id: user.openId, display_name: user.name ?? null, email: user.email ?? null, role: roleFor(user) };
+  const base = {
+    display_name: user.name ?? null,
+    email: user.email ?? null,
+    role: user.role === "admin" ? "admin" : user.role === "teacher" ? "teacher" : "student",
+  };
   if (existing) {
-    const update: Record<string, unknown> = base;
-    if (authUserId && !existing.supabase_auth_user_id) update.supabase_auth_user_id = authUserId;
-    const { data, error } = await client.from("app_users").update(update).eq("id", existing.id).select("id, role").single();
+    const { data, error } = await client.from("app_users").update(base).eq("id", existing.id).select("id, role").single();
     fail(error, "更新 Supabase 使用者身分映射");
     return data as AppUser;
   }
-  const { data, error } = await client.from("app_users").insert({ legacy_user_id: user.id, ...base, supabase_auth_user_id: authUserId ?? null }).select("id, role").single();
+  const { data, error } = await client.from("app_users").insert({ ...base, supabase_auth_user_id: user.id }).select("id, role").single();
   fail(error, "建立 Supabase 使用者身分映射");
   return data as AppUser;
 }
 
-export async function assertSupabaseAdmin(user: User) {
+export async function assertSupabaseAdmin(user: SupabaseAuthenticatedUser) {
   const appUser = await getOrCreateAppUser(user);
-  if (appUser.role !== "admin") throw new Error("Supabase 教師權限不足。");
+  if (appUser.role !== "teacher" && appUser.role !== "admin") throw new Error("Supabase 教師權限不足。");
   return appUser;
 }
 
@@ -92,12 +89,31 @@ export async function uploadMathPhoto(input: { userId: string; filename: string;
 export async function getAttachmentForUser(userId: string, attachmentId: string) {
   const { data, error } = await supabase()
     .from("math_attachments")
-    .select("id, storage_path, recognition_status")
+    .select("id, storage_path, mime_type, recognition_status")
     .eq("id", attachmentId)
     .eq("user_id", userId)
     .maybeSingle();
   fail(error, "讀取題目照片參照");
-  return data ? { id: String(data.id), storagePath: String(data.storage_path), recognitionStatus: String(data.recognition_status) } : undefined;
+  return data ? {
+    id: String(data.id), storagePath: String(data.storage_path), mimeType: String(data.mime_type),
+    recognitionStatus: String(data.recognition_status),
+  } : undefined;
+}
+
+/** 僅由已通過附件擁有權檢查的伺服器端流程呼叫。 */
+export async function downloadMathPhoto(storagePath: string, mimeType: string) {
+  if (!SUPPORTED_IMAGE_TYPES.includes(mimeType as (typeof SUPPORTED_IMAGE_TYPES)[number])) {
+    throw new Error("題目照片格式不受支援。");
+  }
+  const { data, error } = await supabase().storage.from(MATH_BUCKET).download(storagePath);
+  fail(error, "讀取私有題目照片");
+  if (!data) throw new Error("找不到私有題目照片內容。");
+  const bytes = Buffer.from(await data.arrayBuffer());
+  if (bytes.length === 0 || bytes.length > 5 * 1024 * 1024) throw new Error("題目照片大小不符合處理限制。");
+  return {
+    data: bytes.toString("base64"),
+    mimeType: mimeType as "image/jpeg" | "image/png" | "image/webp",
+  };
 }
 
 export async function createAttachmentSignedUrl(storagePath: string) {

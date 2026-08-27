@@ -1,0 +1,15 @@
+import express from "express";
+import { createExpressMiddleware } from "@trpc/server/adapters/express";
+import { appRouter } from "./routers";
+import { createContext } from "./_core/context";
+
+/** 可同時供本機開發伺服器與 Vercel Function 使用的 API 應用程式。 */
+export function createApiApp() {
+  const app = express();
+  app.disable("x-powered-by");
+  // 題目照片在瀏覽器先壓縮為不超過 3MB 的 JPEG；保留額度供 JSON 與 tRPC metadata。
+  app.use(express.json({ limit: "4mb" }));
+  app.use(express.urlencoded({ limit: "4mb", extended: true }));
+  app.use("/api/trpc", createExpressMiddleware({ router: appRouter, createContext }));
+  return app;
+}
