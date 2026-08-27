@@ -52,4 +52,4 @@
 - [x] 讓教師工作台可新增並管理自訂解題教學單元
 - [x] 新增 Supabase Email＋Password 自助註冊、首次驗證信、密碼登入與安全登出流程
 - [ ] 驗證新使用者可自行註冊並取得最低權限 student profile／app_users，且教師角色只能由受保護資料庫調整
-- [ ] 確認最新登出功能版本已同步至 GitHub，並以唯讀檢查確認 Supabase schema／Auth bootstrap 可用
+- [x] 確認最新登出功能版本已同步至 GitHub，並以唯讀檢查確認 Supabase schema／Auth bootstrap 可用
