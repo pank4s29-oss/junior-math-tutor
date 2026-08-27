@@ -19,6 +19,9 @@ const mocks = vi.hoisted(() => ({
   upsertTeacherUnit: vi.fn(),
   addApprovedContent: vi.fn(),
   listEscalations: vi.fn(),
+  listTeacherUnits: vi.fn(),
+  listTeacherContents: vi.fn(),
+  updateEscalationStatus: vi.fn(),
 }));
 
 vi.mock("../_core/notification", () => ({ notifyOwner: mocks.notifyOwner }));
@@ -39,6 +42,9 @@ vi.mock("../tutor/db", () => ({
   upsertTeacherUnit: mocks.upsertTeacherUnit,
   addApprovedContent: mocks.addApprovedContent,
   listEscalations: mocks.listEscalations,
+  listTeacherUnits: mocks.listTeacherUnits,
+  listTeacherContents: mocks.listTeacherContents,
+  updateEscalationStatus: mocks.updateEscalationStatus,
 }));
 
 import { tutorRouter, validatePhotoDataUrl } from "./tutor";
@@ -72,6 +78,10 @@ const completeSolution = {
 
 function caller() {
   return tutorRouter.createCaller({ user } as never);
+}
+
+function teacherCaller() {
+  return tutorRouter.createCaller({ user: { ...user, role: "admin" as const } } as never);
 }
 
 beforeEach(() => {
@@ -123,6 +133,18 @@ describe("題目照片驗證與受控解題路由", () => {
     expect(result.solution).toMatchObject({ needsClarification: true, confidence: 42 });
   });
 
+  it("產生可編輯的手寫題目轉寫稿，並在低信心時標示照片不清楚", async () => {
+    mocks.getAttachmentForUser.mockResolvedValue({ storageKey: "student-12/math-problems/handwriting.png" });
+    mocks.storageGetSignedUrl.mockResolvedValue("https://signed.example/handwriting.png");
+    mocks.invokeLLM.mockResolvedValue({ choices: [{ message: { content: JSON.stringify({ isReadable: false, confidence: 53, transcription: "2x + [不清楚] = 13", clarification: "請補拍等號右邊。", cropHint: "保留完整題幹與等號右側。" }) } }] });
+
+    const result = await caller().recognizePhoto({ attachmentId: 14 });
+
+    expect(result).toMatchObject({ isReadable: false, confidence: 53, transcription: "2x + [不清楚] = 13" });
+    expect(mocks.updateAttachmentRecognition).toHaveBeenCalledWith(14, "unclear");
+    expect(mocks.invokeLLM).toHaveBeenCalledWith(expect.objectContaining({ model: "claude-sonnet-4-6", response_format: expect.any(Object) }));
+  });
+
   it("將安全照片存入物件儲存並只保存檔案參照", async () => {
     mocks.storagePut.mockResolvedValue({ key: "12/math-problems/q_a1.png", url: "/manus-storage/12/math-problems/q_a1.png" });
     mocks.createMathAttachment.mockResolvedValue(77);
@@ -149,5 +171,22 @@ describe("題目照片驗證與受控解題路由", () => {
     expect(mocks.notifyOwner).toHaveBeenCalledWith(expect.objectContaining({ title: "國中數學解題需要教師協助" }));
     expect(mocks.createEscalation).toHaveBeenCalledWith(expect.objectContaining({ attemptId: 8, priority: "high", notificationDelivered: true }));
     expect(result).toEqual({ escalationId: 43, notified: true });
+  });
+
+  it("允許管理者讀取、儲存教材規則與更新案件狀態", async () => {
+    mocks.listTeacherUnits.mockResolvedValue([{ id: 1, grade: "seven", unitKey: "linear-equations" }]);
+    mocks.listTeacherContents.mockResolvedValue([{ id: 3, title: "移項觀念" }]);
+    mocks.listEscalations.mockResolvedValue([{ id: 7, status: "new" }]);
+    mocks.upsertTeacherUnit.mockResolvedValue(1);
+    mocks.addApprovedContent.mockResolvedValue(3);
+    const admin = teacherCaller();
+
+    await expect(admin.teacher.listUnits()).resolves.toHaveLength(1);
+    await expect(admin.teacher.listContents()).resolves.toHaveLength(1);
+    await expect(admin.teacher.listEscalations()).resolves.toHaveLength(1);
+    await expect(admin.teacher.upsertUnit({ grade: "seven", unitKey: "linear-equations", name: "一元一次方程式", teachingRules: "先辨認未知數，再提醒等式兩邊必須保持平衡，最後一定要代回原式驗算。", isApproved: true })).resolves.toBe(1);
+    await expect(admin.teacher.addApprovedContent({ unitId: 1, type: "concept", title: "等量公理", body: "等式兩邊同時加、減、乘、除同一個非零數，等式依然成立。", isApproved: true })).resolves.toBe(3);
+    await expect(admin.teacher.updateEscalationStatus({ id: 7, status: "resolved" })).resolves.toBeUndefined();
+    expect(mocks.updateEscalationStatus).toHaveBeenCalledWith({ id: 7, status: "resolved" });
   });
 });

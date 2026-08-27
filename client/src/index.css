@@ -165,6 +165,20 @@
     min-width: 0;
   }
 
+  .formula-host math-field.math-formula-field {
+    display: block;
+    min-height: 2.4rem;
+    width: 100%;
+    border: 0;
+    background: transparent;
+    color: #173b4d;
+    font-size: 1.25rem;
+    --caret-color: #196b63;
+    --selection-background-color: #dff1ed;
+    --contains-highlight-background-color: #eaf6f3;
+    --hue: 170;
+  }
+
   @media (min-width: 640px) {
     .container {
       padding-left: 1.5rem; /* 24px - tablet padding */

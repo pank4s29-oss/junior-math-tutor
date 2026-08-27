@@ -1,5 +1,5 @@
 import { useAuth } from "@/_core/hooks/useAuth";
-import { AIChatBox, type Message } from "@/components/AIChatBox";
+import { AIChatBox, type Message, type PhotoQuality } from "@/components/AIChatBox";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { trpc } from "@/lib/trpc";
@@ -10,7 +10,7 @@ import { toast } from "sonner";
 import { startLogin } from "@/const";
 import { Link } from "wouter";
 
-type PendingAttachment = { file: File; preview: string };
+type PendingAttachment = { file: File; preview: string; normalizedDataUrl: string; quality: PhotoQuality; attachmentId?: number };
 type LastAttempt = { id: number; variationQuestion: string; confidence: number; needsClarification: boolean };
 
 const MODE_DETAILS: Record<TutorMode, { description: string; icon: typeof Lightbulb }> = {
@@ -19,12 +19,47 @@ const MODE_DETAILS: Record<TutorMode, { description: string; icon: typeof Lightb
   check: { description: "檢查你的過程，找出第一個可修正處。", icon: CheckCircle2 },
 };
 
-function fileToDataUrl(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error("題目照片讀取失敗，請重新選擇檔案。"));
-    reader.readAsDataURL(file);
+function prepareHandwrittenPhoto(file: File) {
+  return new Promise<Pick<PendingAttachment, "preview" | "normalizedDataUrl" | "quality">>((resolve, reject) => {
+    const image = new Image();
+    const objectUrl = URL.createObjectURL(file);
+    image.onload = () => {
+      const longest = Math.max(image.naturalWidth, image.naturalHeight);
+      const scale = Math.min(1, 1800 / longest);
+      const width = Math.max(1, Math.round(image.naturalWidth * scale));
+      const height = Math.max(1, Math.round(image.naturalHeight * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      if (!context) { URL.revokeObjectURL(objectUrl); reject(new Error("此裝置暫時無法處理題目照片。")); return; }
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, width, height);
+      context.filter = "contrast(1.16) brightness(1.04)";
+      context.drawImage(image, 0, 0, width, height);
+      context.filter = "none";
+      const sample = context.getImageData(0, 0, Math.min(width, 96), Math.min(height, 96)).data;
+      let total = 0;
+      let totalSquared = 0;
+      for (let index = 0; index < sample.length; index += 4) {
+        const luminance = sample[index] * 0.299 + sample[index + 1] * 0.587 + sample[index + 2] * 0.114;
+        total += luminance;
+        totalSquared += luminance * luminance;
+      }
+      const count = sample.length / 4;
+      const average = total / count;
+      const contrast = Math.sqrt(Math.max(0, totalSquared / count - average * average));
+      const tooSmall = Math.min(image.naturalWidth, image.naturalHeight) < 700;
+      const dimOrFlat = average < 55 || contrast < 18;
+      const quality: PhotoQuality = tooSmall || dimOrFlat
+        ? { tone: "warning", message: tooSmall ? "照片解析度偏低，建議靠近題目補拍；仍可先嘗試辨識。" : "已自動提高對比，但光線或筆跡偏淡，請務必核對辨識稿。" }
+        : { tone: "ready", message: "已自動校正尺寸與對比。請先辨識，再核對數字、分數線、根號與等號。" };
+      const normalizedDataUrl = canvas.toDataURL("image/jpeg", 0.9);
+      URL.revokeObjectURL(objectUrl);
+      resolve({ preview: normalizedDataUrl, normalizedDataUrl, quality });
+    };
+    image.onerror = () => { URL.revokeObjectURL(objectUrl); reject(new Error("題目照片讀取失敗，請重新選擇檔案。")); };
+    image.src = objectUrl;
   });
 }
 
@@ -35,6 +70,7 @@ export default function Home() {
   const [mode, setMode] = useState<TutorMode>("guided");
   const [messages, setMessages] = useState<Message[]>([]);
   const [attachment, setAttachment] = useState<PendingAttachment | null>(null);
+  const [recognitionDraft, setRecognitionDraft] = useState("");
   const [lastAttempt, setLastAttempt] = useState<LastAttempt | null>(null);
   const [practiceAnswer, setPracticeAnswer] = useState("");
   const [remaining, setRemaining] = useState<number | null>(null);
@@ -43,6 +79,7 @@ export default function Home() {
   const unit = units.find(item => item.key === unitKey) ?? units[0];
   const history = trpc.tutor.learningLoop.useQuery(undefined, { enabled: isAuthenticated });
   const uploadPhoto = trpc.tutor.uploadPhoto.useMutation();
+  const recognizePhoto = trpc.tutor.recognizePhoto.useMutation();
   const solve = trpc.tutor.solve.useMutation();
   const reportConcern = trpc.tutor.reportConcern.useMutation();
   const savePractice = trpc.tutor.savePractice.useMutation();
@@ -52,7 +89,7 @@ export default function Home() {
     setUnitKey(CORE_UNITS[nextGrade][0].key);
   };
 
-  const selectAttachment = (file: File) => {
+  const selectAttachment = async (file: File) => {
     if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
       toast.error("請上傳 JPEG、PNG 或 WebP 格式的題目照片。");
       return;
@@ -61,8 +98,49 @@ export default function Home() {
       toast.error("題目照片需小於 5MB，請壓縮或重新拍攝。");
       return;
     }
-    setAttachment({ file, preview: URL.createObjectURL(file) });
-    toast.success("已附上題目照片，送出後我會先確認辨識是否可靠。");
+    try {
+      const prepared = await prepareHandwrittenPhoto(file);
+      setAttachment({ file, ...prepared });
+      setRecognitionDraft("");
+      toast.success("已完成照片品質預檢與自動清晰化。請先辨識並核對題目。", { icon: <BadgeCheck className="size-4" /> });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "題目照片讀取失敗，請重新選擇檔案。");
+    }
+  };
+
+  const ensureAttachmentUploaded = async () => {
+    if (!attachment) return undefined;
+    if (attachment.attachmentId) return attachment.attachmentId;
+    const uploaded = await uploadPhoto.mutateAsync({
+      filename: attachment.file.name.replace(/\.[a-zA-Z0-9]+$/, "") + ".jpg",
+      mimeType: "image/jpeg",
+      dataUrl: attachment.normalizedDataUrl,
+    });
+    setAttachment(current => current ? { ...current, attachmentId: uploaded.attachmentId } : current);
+    return uploaded.attachmentId;
+  };
+
+  const recognizeHandwriting = async () => {
+    if (!attachment) return;
+    if (!isAuthenticated) { toast.message("請先登入，再使用手寫題目辨識與保存功能。"); startLogin(); return; }
+    try {
+      const attachmentId = await ensureAttachmentUploaded();
+      if (!attachmentId) return;
+      const result = await recognizePhoto.mutateAsync({ attachmentId });
+      setRecognitionDraft(result.transcription);
+      setRemaining(result.remaining);
+      setAttachment(current => current ? {
+        ...current,
+        attachmentId,
+        quality: result.isReadable
+          ? { tone: "ready", message: `辨識信心 ${result.confidence}%。請核對後可直接修正辨識稿。` }
+          : { tone: "warning", message: `辨識信心 ${result.confidence}%。${result.clarification || result.cropHint || "請補拍後再試。"}` },
+      } : current);
+      if (result.isReadable) toast.success("已產生可編輯辨識稿，請核對題目再送出。");
+      else toast.message(result.clarification || "題目照片可能不完整，請依提示補拍或直接輸入。", { icon: <CircleHelp className="size-4" /> });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "手寫題目辨識暫時無法使用，請直接輸入題目。");
+    }
   };
 
   const sendQuestion = async (question: string) => {
@@ -75,16 +153,13 @@ export default function Home() {
     setLastAttempt(null);
     try {
       let attachmentId: number | undefined;
-      if (attachment) {
-        const dataUrl = await fileToDataUrl(attachment.file);
-        const uploaded = await uploadPhoto.mutateAsync({ filename: attachment.file.name, mimeType: attachment.file.type as "image/jpeg" | "image/png" | "image/webp", dataUrl });
-        attachmentId = uploaded.attachmentId;
-      }
+      if (attachment) attachmentId = await ensureAttachmentUploaded();
       const result = await solve.mutateAsync({ question, grade, unitKey: unit.key, mode, attachmentId });
       setMessages(current => [...current, { role: "assistant", content: result.responseMarkdown }]);
       setLastAttempt({ id: result.attemptId, variationQuestion: result.solution.variationQuestion, confidence: result.solution.confidence, needsClarification: result.solution.needsClarification });
       setRemaining(result.remaining);
       setAttachment(null);
+      setRecognitionDraft("");
       history.refetch();
       if (result.solution.needsClarification) toast.message("我需要更多題目資訊，請依回覆補拍或補充文字。", { icon: <CircleHelp className="size-4" /> });
     } catch (error) {
@@ -124,7 +199,7 @@ export default function Home() {
       <header className="sticky top-0 z-20 border-b border-white/70 bg-[#f7f8f5]/90 backdrop-blur-xl">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6 lg:px-8">
           <div className="flex items-center gap-3"><div className="flex size-10 items-center justify-center rounded-2xl bg-[#173b4d] text-[#f8cf88] shadow-lg shadow-[#173b4d]/15"><span className="font-serif text-xl font-semibold">∑</span></div><div><p className="text-sm font-bold tracking-tight text-[#173b4d]">數域・解題教練</p><p className="text-[11px] tracking-[0.14em] text-slate-500">JUNIOR MATH STUDIO</p></div></div>
-          {loading ? <Loader2 className="size-5 animate-spin text-slate-400" /> : isAuthenticated ? <div className="flex items-center gap-2 rounded-full bg-white px-3 py-1.5 text-xs font-medium text-slate-600 shadow-sm ring-1 ring-slate-100"><UserRoundCheck className="size-3.5 text-[#196b63]" /><span className="hidden sm:inline">{user?.name || "我的學習空間"}</span><span className="sm:hidden">已登入</span></div> : <Button onClick={startLogin} size="sm" className="rounded-full bg-[#173b4d] px-4 text-xs hover:bg-[#0f2e3d]">登入學習空間</Button>}
+          {loading ? <Loader2 className="size-5 animate-spin text-slate-400" /> : isAuthenticated ? <div className="flex items-center gap-2"><>{user?.role === "admin" && <Link href="/teacher" className="hidden rounded-full bg-[#eaf6f3] px-3 py-1.5 text-xs font-semibold text-[#196b63] transition hover:bg-[#dff1ed] sm:inline">教師工作台</Link>}</><div className="flex items-center gap-2 rounded-full bg-white px-3 py-1.5 text-xs font-medium text-slate-600 shadow-sm ring-1 ring-slate-100"><UserRoundCheck className="size-3.5 text-[#196b63]" /><span className="hidden sm:inline">{user?.name || "我的學習空間"}</span><span className="sm:hidden">已登入</span></div></div> : <Button onClick={startLogin} size="sm" className="rounded-full bg-[#173b4d] px-4 text-xs hover:bg-[#0f2e3d]">登入學習空間</Button>}
         </div>
       </header>
 
@@ -144,7 +219,7 @@ export default function Home() {
             <section aria-label="解題模式" className="mb-5 grid gap-2 sm:grid-cols-3">{(["guided", "step_by_step", "check"] as TutorMode[]).map(item => { const Icon = MODE_DETAILS[item].icon; const selected = mode === item; return <button key={item} onClick={() => setMode(item)} className={`rounded-2xl border p-4 text-left transition ${selected ? "border-[#196b63] bg-[#eaf6f3] shadow-[0_12px_25px_-20px_rgba(25,107,99,0.7)]" : "border-slate-200 bg-white hover:border-[#a7d4cd] hover:bg-[#fcfefd]"}`}><div className="flex items-center gap-2"><div className={`flex size-8 items-center justify-center rounded-xl ${selected ? "bg-[#196b63] text-white" : "bg-slate-100 text-slate-500"}`}><Icon className="size-4" /></div><span className="text-sm font-semibold text-slate-800">{MODE_LABELS[item]}</span></div><p className="mt-2 text-xs leading-5 text-slate-500">{MODE_DETAILS[item].description}</p></button>; })}</section>
 
             {!isAuthenticated && !loading && <div className="mb-4 flex items-start gap-3 rounded-2xl border border-[#f2dba9] bg-[#fff9ea] p-4 text-sm text-[#74511b]"><AlertCircle className="mt-0.5 size-5 shrink-0" /><p>你可以先瀏覽介面；登入後才會啟用安全上傳、品牌託管解題、錯題保存與教師協助通知。</p></div>}
-            <AIChatBox messages={messages} onSendMessage={sendQuestion} onAttachmentSelected={selectAttachment} onClearAttachment={() => setAttachment(null)} attachmentName={attachment?.file.name} isLoading={solve.isPending || uploadPhoto.isPending} suggestedPrompts={["解 3x − 7 = 11，先給我提示", "我不懂負數相乘的規則", "幫我檢查：2(x+3)=16，我算 x=5"]} />
+            <AIChatBox messages={messages} onSendMessage={sendQuestion} onAttachmentSelected={selectAttachment} onClearAttachment={() => { setAttachment(null); setRecognitionDraft(""); }} onRecognizePhoto={recognizeHandwriting} onAttachmentTranscriptionChange={setRecognitionDraft} attachmentName={attachment?.file.name} attachmentPreview={attachment?.preview} attachmentTranscription={recognitionDraft} photoQuality={attachment?.quality} isRecognizing={recognizePhoto.isPending} isLoading={solve.isPending || uploadPhoto.isPending} suggestedPrompts={["解 3x − 7 = 11，先給我提示", "我不懂負數相乘的規則", "幫我檢查：2(x+3)=16，我算 x=5"]} />
 
             {lastAttempt && <section className="mt-5 rounded-[1.5rem] border border-[#d8ebe7] bg-[#f7fcfa] p-4 sm:p-5"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><p className="flex items-center gap-2 text-sm font-semibold text-[#173b4d]"><NotebookPen className="size-4 text-[#196b63]" />把這題變成你的學習資產</p><p className="mt-1 text-xs leading-5 text-slate-500">信心指標 {lastAttempt.confidence}%{lastAttempt.needsClarification ? "・需要補充題目資訊" : "・已完成結構化解題"}</p></div><div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => report("wrong_answer")} disabled={reportConcern.isPending} className="rounded-full border-[#eacbc2] bg-white text-[#9a4331] hover:bg-[#fff5f2]"><FileWarning className="mr-1.5 size-3.5" />回報答案問題</Button><Button size="sm" onClick={() => report("teacher_help")} disabled={reportConcern.isPending} className="rounded-full bg-[#173b4d] hover:bg-[#0f2e3d]"><GraduationCap className="mr-1.5 size-3.5" />請教師協助</Button></div></div>
               <div className="mt-4 rounded-2xl bg-white p-3 ring-1 ring-[#d8ebe7]"><p className="text-xs font-semibold text-[#196b63]">變式練習</p><p className="mt-1 text-sm leading-6 text-slate-700">{lastAttempt.variationQuestion}</p><Textarea value={practiceAnswer} onChange={event => setPracticeAnswer(event.target.value)} placeholder="可先寫下你的答案或思路，之後再回來檢查。" className="mt-3 min-h-20 border-slate-200 text-sm" /><div className="mt-3 flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => saveVariation("not_attempted")} disabled={savePractice.isPending} className="rounded-full">稍後練習</Button><Button size="sm" variant="outline" onClick={() => saveVariation("needs_review")} disabled={savePractice.isPending} className="rounded-full">完成，請幫我回顧</Button><Button size="sm" onClick={() => saveVariation("correct")} disabled={savePractice.isPending} className="rounded-full bg-[#196b63] hover:bg-[#115950]">我已完成</Button></div></div>

@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import {
   approvedContents,
   dailyUsage,
@@ -184,4 +184,35 @@ export async function listEscalations() {
   const db = await getDb();
   if (!db) return [];
   return db.select().from(teacherEscalations).orderBy(desc(teacherEscalations.createdAt)).limit(50);
+}
+
+export async function listTeacherUnits() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(teacherUnits).orderBy(asc(teacherUnits.grade), asc(teacherUnits.unitKey));
+}
+
+export async function listTeacherContents() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({
+    id: approvedContents.id,
+    unitId: approvedContents.unitId,
+    type: approvedContents.type,
+    title: approvedContents.title,
+    body: approvedContents.body,
+    isApproved: approvedContents.isApproved,
+    version: approvedContents.version,
+    unitName: teacherUnits.name,
+    grade: teacherUnits.grade,
+  }).from(approvedContents)
+    .leftJoin(teacherUnits, eq(approvedContents.unitId, teacherUnits.id))
+    .orderBy(desc(approvedContents.updatedAt))
+    .limit(80);
+}
+
+export async function updateEscalationStatus(input: { id: number; status: "new" | "reviewing" | "resolved" }) {
+  const db = await getDb();
+  if (!db) throw new Error("資料服務目前無法使用，請稍後再試。");
+  await db.update(teacherEscalations).set({ status: input.status }).where(eq(teacherEscalations.id, input.id));
 }
