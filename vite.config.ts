@@ -164,7 +164,9 @@ export default defineConfig({
   root: path.resolve(import.meta.dirname, "client"),
   publicDir: path.resolve(import.meta.dirname, "client", "public"),
   build: {
-    outDir: path.resolve(import.meta.dirname, "dist/public"),
+    // Vercel Express 專案會將根目錄 public/ 交由 CDN 提供；不可依賴
+    // Express static middleware 來供應前端檔案。
+    outDir: path.resolve(import.meta.dirname, "public"),
     emptyOutDir: true,
   },
   server: {

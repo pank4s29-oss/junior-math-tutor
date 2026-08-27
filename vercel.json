@@ -1,13 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "framework": "vite",
   "buildCommand": "pnpm build:client",
-  "outputDirectory": "dist/public",
-  "functions": {
-    "api/**/*.ts": {
-      "includeFiles": "{server,shared}/**"
-    }
-  },
   "rewrites": [
     {
       "source": "/((?!api/).*)",
