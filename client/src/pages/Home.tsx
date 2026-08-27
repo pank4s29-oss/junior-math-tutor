@@ -1,12 +1,12 @@
 import { useAuth } from "@/_core/hooks/useAuth";
 import { AIChatBox, type Message, type PhotoQuality } from "@/components/AIChatBox";
-import { AuthDialog } from "@/components/AuthDialog";
+import { AuthDialogNext } from "@/components/AuthDialogNext";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { trpc } from "@/lib/trpc";
 import { CORE_UNITS, GRADE_LABELS, MODE_LABELS, type Grade, type TutorMode } from "../../../shared/mathCurriculum";
-import { AlertCircle, ArrowRight, BadgeCheck, BookOpenCheck, CheckCircle2, CircleHelp, Clock3, FileWarning, GraduationCap, Lightbulb, Loader2, NotebookPen, ShieldCheck, Sparkles, Upload, UserRoundCheck } from "lucide-react";
-import { useMemo, useState } from "react";
+import { AlertCircle, ArrowRight, BadgeCheck, BookOpenCheck, CheckCircle2, CircleHelp, Clock3, FileWarning, GraduationCap, Lightbulb, Loader2, LogOut, NotebookPen, ShieldCheck, Sparkles, Upload, UserRoundCheck } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Link } from "wouter";
 
@@ -69,7 +69,7 @@ function prepareHandwrittenPhoto(file: File) {
 }
 
 export default function Home() {
-  const { user, loading, isAuthenticated } = useAuth();
+  const { user, loading, isAuthenticated, logout } = useAuth();
   const [grade, setGrade] = useState<Grade>("seven");
   const [unitKey, setUnitKey] = useState(CORE_UNITS.seven[0].key);
   const [mode, setMode] = useState<TutorMode>("guided");
@@ -81,7 +81,9 @@ export default function Home() {
   const [remaining, setRemaining] = useState<number | null>(null);
   const [authDialogOpen, setAuthDialogOpen] = useState(false);
 
-  const units = useMemo(() => CORE_UNITS[grade], [grade]);
+  const curriculum = trpc.tutor.curriculum.useQuery(undefined, { enabled: isAuthenticated, retry: false });
+  const unitsByGrade = curriculum.data?.units ?? CORE_UNITS;
+  const units = useMemo(() => unitsByGrade[grade] ?? CORE_UNITS[grade], [grade, unitsByGrade]);
   const unit = units.find(item => item.key === unitKey) ?? units[0];
   const history = trpc.tutor.learningLoop.useQuery(undefined, { enabled: isAuthenticated }) as unknown as { data?: LearningAttempt[]; isLoading: boolean; refetch: () => unknown };
   const uploadPhoto = trpc.tutor.uploadPhoto.useMutation();
@@ -90,9 +92,19 @@ export default function Home() {
   const reportConcern = trpc.tutor.reportConcern.useMutation();
   const savePractice = trpc.tutor.savePractice.useMutation();
 
-  const switchGrade = (nextGrade: Grade) => {
-    setGrade(nextGrade);
-    setUnitKey(CORE_UNITS[nextGrade][0].key);
+  useEffect(() => {
+    if (!units.some(item => item.key === unitKey)) setUnitKey(units[0].key);
+  }, [unitKey, units]);
+
+  const switchGrade = (nextGrade: Grade) => setGrade(nextGrade);
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+      toast.success("已安全登出此裝置。", { icon: <CheckCircle2 className="size-4" /> });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "暫時無法登出，請稍後再試。");
+    }
   };
 
   const selectAttachment = async (file: File) => {
@@ -205,7 +217,7 @@ export default function Home() {
       <header className="sticky top-0 z-20 border-b border-white/70 bg-[#f7f8f5]/90 backdrop-blur-xl">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6 lg:px-8">
           <div className="flex items-center gap-3"><div className="flex size-10 items-center justify-center rounded-2xl bg-[#173b4d] text-[#f8cf88] shadow-lg shadow-[#173b4d]/15"><span className="font-serif text-xl font-semibold">∑</span></div><div><p className="text-sm font-bold tracking-tight text-[#173b4d]">數域・解題教練</p><p className="text-[11px] tracking-[0.14em] text-slate-500">JUNIOR MATH STUDIO</p></div></div>
-          {loading ? <Loader2 className="size-5 animate-spin text-slate-400" /> : isAuthenticated ? <div className="flex items-center gap-2"><>{(user?.role === "teacher" || user?.role === "admin") && <Link href="/teacher" className="hidden rounded-full bg-[#eaf6f3] px-3 py-1.5 text-xs font-semibold text-[#196b63] transition hover:bg-[#dff1ed] sm:inline">教師工作台</Link>}</><div className="flex items-center gap-2 rounded-full bg-white px-3 py-1.5 text-xs font-medium text-slate-600 shadow-sm ring-1 ring-slate-100"><UserRoundCheck className="size-3.5 text-[#196b63]" /><span className="hidden sm:inline">{user?.name || "我的學習空間"}</span><span className="sm:hidden">已登入</span></div></div> : <Button onClick={() => setAuthDialogOpen(true)} size="sm" className="rounded-full bg-[#173b4d] px-4 text-xs hover:bg-[#0f2e3d]">登入學習空間</Button>}
+          {loading ? <Loader2 className="size-5 animate-spin text-slate-400" /> : isAuthenticated ? <div className="flex items-center gap-2"><>{(user?.role === "teacher" || user?.role === "admin") && <Link href="/teacher" className="hidden rounded-full bg-[#eaf6f3] px-3 py-1.5 text-xs font-semibold text-[#196b63] transition hover:bg-[#dff1ed] sm:inline">教師工作台</Link>}</><div className="flex items-center gap-2 rounded-full bg-white px-3 py-1.5 text-xs font-medium text-slate-600 shadow-sm ring-1 ring-slate-100"><UserRoundCheck className="size-3.5 text-[#196b63]" /><span className="hidden sm:inline">{user?.name || "我的學習空間"}</span><span className="sm:hidden">已登入</span></div><Button type="button" variant="outline" size="sm" onClick={handleLogout} className="rounded-full border-slate-200 bg-white px-3 text-xs text-slate-600 hover:bg-slate-50"><LogOut className="mr-1.5 size-3.5" />登出</Button></div> : <Button onClick={() => setAuthDialogOpen(true)} size="sm" className="rounded-full bg-[#173b4d] px-4 text-xs hover:bg-[#0f2e3d]">登入學習空間</Button>}
         </div>
       </header>
 
@@ -220,6 +232,8 @@ export default function Home() {
               <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-semibold tracking-[0.12em] text-[#196b63]">01　設定今天的學習範圍</p><p className="mt-1 text-sm text-slate-500">選擇年級與單元，讓我使用合適的教學規則。</p></div><div className="flex items-center gap-2 text-xs text-slate-500"><BadgeCheck className="size-4 text-[#196b63]" />教師核准內容優先</div></div>
               <div className="mt-4 flex gap-2 overflow-x-auto pb-1">{(["seven", "eight", "nine"] as Grade[]).map(item => <button key={item} onClick={() => switchGrade(item)} className={`shrink-0 rounded-full px-4 py-2 text-sm font-medium transition ${grade === item ? "bg-[#196b63] text-white shadow-sm" : "bg-[#f2f5f4] text-slate-600 hover:bg-[#e4efed]"}`}>{GRADE_LABELS[item]}</button>)}</div>
               <div className="mt-3 flex gap-2 overflow-x-auto pb-1">{units.map(item => <button key={item.key} onClick={() => setUnitKey(item.key)} className={`shrink-0 rounded-xl border px-3 py-2 text-xs font-medium transition ${unit.key === item.key ? "border-[#9acfc6] bg-[#eaf6f3] text-[#125d55]" : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"}`}>{item.label}</button>)}</div>
+              {isAuthenticated && curriculum.isFetching && <p className="mt-3 flex items-center gap-2 text-xs text-slate-400"><Loader2 className="size-3.5 animate-spin" />正在同步教師核准單元…</p>}
+              {isAuthenticated && curriculum.isError && <p className="mt-3 text-xs text-[#9a5b21]">暫時無法同步自訂單元；目前顯示核心課綱。</p>}
             </section>
 
             <section aria-label="解題模式" className="mb-5 grid gap-2 sm:grid-cols-3">{(["guided", "step_by_step", "check"] as TutorMode[]).map(item => { const Icon = MODE_DETAILS[item].icon; const selected = mode === item; return <button key={item} onClick={() => setMode(item)} className={`rounded-2xl border p-4 text-left transition ${selected ? "border-[#196b63] bg-[#eaf6f3] shadow-[0_12px_25px_-20px_rgba(25,107,99,0.7)]" : "border-slate-200 bg-white hover:border-[#a7d4cd] hover:bg-[#fcfefd]"}`}><div className="flex items-center gap-2"><div className={`flex size-8 items-center justify-center rounded-xl ${selected ? "bg-[#196b63] text-white" : "bg-slate-100 text-slate-500"}`}><Icon className="size-4" /></div><span className="text-sm font-semibold text-slate-800">{MODE_LABELS[item]}</span></div><p className="mt-2 text-xs leading-5 text-slate-500">{MODE_DETAILS[item].description}</p></button>; })}</section>
@@ -239,7 +253,7 @@ export default function Home() {
           </aside>
         </section>
       </main>
-      <AuthDialog open={authDialogOpen} onOpenChange={setAuthDialogOpen} />
+      <AuthDialogNext open={authDialogOpen} onOpenChange={setAuthDialogOpen} />
     </div>
   );
 }

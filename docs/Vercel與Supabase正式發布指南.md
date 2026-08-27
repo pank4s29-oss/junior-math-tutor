@@ -6,14 +6,16 @@ Gemini 服務使用官方 `@google/genai` SDK 與帳戶目前可用的 `gemini-3
 
 | 區域 | 元件 | 用途 | 是否可公開 |
 |---|---|---|---|
-| 前端 | `VITE_SUPABASE_URL`、`VITE_SUPABASE_PUBLISHABLE_KEY` | Magic Link 登入與取得使用者 session | 是，Supabase 設計為瀏覽器端使用 |
+| 前端 | `VITE_SUPABASE_URL`、`VITE_SUPABASE_PUBLISHABLE_KEY` | 信箱＋密碼註冊／登入、信箱驗證回站、密碼重設與取得 session | 是，Supabase 設計為瀏覽器端使用 |
 | Vercel API | `SUPABASE_SECRET_KEY` | 後端資料、私有 Storage、profile 角色查詢 | 否 |
 | Vercel API | `GEMINI_API_KEY` | Gemini 3.6 Flash 的文字解題與圖片辨識 | 否 |
 | 僅維運 | `SUPABASE_DB_URL` | 執行 SQL migration 的管理連線，不是網站 runtime 必需 | 否 |
 
 ## 1. Supabase 設定
 
-先在 Supabase SQL Editor 依序套用 `supabase/migrations/20260827_03_supabase_auth_native_identity.sql`、`20260827_04_auth_profile_bootstrap.sql` 與 `20260827_05_auth_app_user_bootstrap.sql`；前者讓新帳號可以只依 `auth.users` UUID 建立 `app_users`，同時保留早期資料的相容欄位，後兩者讓每一個 Auth 帳號建立時原子化產生最低權限 `student` 的 `profiles` 與 `app_users`。接著在 **Authentication → Providers → Email** 啟用 Email provider，並在 **Authentication → URL Configuration** 將 Site URL 設為正式 Vercel 網域。額外 Redirect URLs 至少應包含 `http://localhost:3000/**` 與 `https://*-<你的 Vercel 帳號或團隊 slug>.vercel.app/**`；正式環境另加精確的正式網域。Supabase 對 `redirectTo` 僅接受允許清單中的網址，並建議正式環境使用精確網址。[1]
+先在 Supabase SQL Editor 依序套用 `supabase/migrations/20260827_03_supabase_auth_native_identity.sql`、`20260827_04_auth_profile_bootstrap.sql` 與 `20260827_05_auth_app_user_bootstrap.sql`；前者讓新帳號可以只依 `auth.users` UUID 建立 `app_users`，同時保留早期資料的相容欄位，後兩者讓每一個 Auth 帳號建立時原子化產生最低權限 `student` 的 `profiles` 與 `app_users`。接著在 **Authentication → Providers → Email** 啟用 Email provider，並保持 **Confirm email** 啟用。使用者在網站設定密碼並按註冊後，`auth.signUp` 會建立帳號和寄出驗證信；首次驗證後，往後可直接以信箱＋密碼登入，無須再次靠信件登入。
+
+在 **Authentication → URL Configuration** 將 Site URL 設為正式 Vercel 網域，並在 Redirect URLs 加入正式網域的 `/**`、`/reset-password`、`http://localhost:5173/**` 與必要的 Vercel Preview 網域。Supabase 對 `emailRedirectTo` 與 `redirectTo` 僅接受允許清單中的網址，正式環境應優先使用精確網域。[1] [7]
 
 登入後，將教師的 `profiles.role` 更新為 `teacher` 或 `admin`；伺服器會先驗證 Supabase access token，再以 server-only key 讀取此欄位。這表示瀏覽器傳來的 user metadata 無法自行提升教師權限。
 
@@ -29,7 +31,7 @@ Gemini 服務使用官方 `@google/genai` SDK 與帳戶目前可用的 `gemini-3
 | `SUPABASE_SECRET_KEY` | 是 | 是 | 是 | 僅 server-side 的 Supabase Secret key |
 | `GEMINI_API_KEY` | 是 | 是 | 是 | 僅 server-side Gemini API key |
 
-建議先建立 Preview deployment 並以實際學生帳號驗證 Magic Link、文字解題、手寫照片、錯題本、教師工作台與資料隔離；確認後才將 `main` 發布為 Production。Vercel Function 每次請求或回應的 payload 上限為 4.5MB，因此前端會在送出前將圖片縮放與 JPEG 壓縮至約 3MB；不要移除此防護。[3]
+建議先建立 Preview deployment 並以實際學生帳號驗證信箱＋密碼註冊、確認信、密碼登入、密碼重設、文字解題、手寫照片、錯題本、教師工作台與資料隔離；確認後才將 `main` 發布為 Production。Vercel Function 每次請求或回應的 payload 上限為 4.5MB，因此前端會在送出前將圖片縮放與 JPEG 壓縮至約 3MB；不要移除此防護。[3]
 
 ## 3. 教師案件通知與後續選項
 
@@ -52,3 +54,5 @@ Gemini 服務使用官方 `@google/genai` SDK 與帳戶目前可用的 `gemini-3
 [5] [Google AI for Developers, Image understanding](https://ai.google.dev/gemini-api/docs/image-understanding)
 
 [6] [Vercel, Functions](https://vercel.com/docs/functions)
+
+[7] [Supabase, Password-based Auth](https://supabase.com/docs/guides/auth/passwords)

@@ -11,6 +11,8 @@ type TeacherUnitRow = {
   version: number;
 };
 
+type StudentUnitRow = Pick<TeacherUnitRow, "grade" | "unit_key" | "name">;
+
 type ApprovedContentRow = {
   id: string;
   unit_id: string;
@@ -58,7 +60,7 @@ export async function getTutorContext(grade: Grade, unitKey: string) {
     .eq("is_approved", true)
     .maybeSingle<TeacherUnitRow>();
   fail(unitError, "讀取教師單元規則");
-  if (!unit) return { rules: "", contents: [] as Array<{ title: string; body: string; type: string }> };
+  if (!unit) return { name: undefined, rules: "", contents: [] as Array<{ title: string; body: string; type: string }> };
 
   const { data: contents, error: contentError } = await supabase
     .from("approved_contents")
@@ -71,9 +73,47 @@ export async function getTutorContext(grade: Grade, unitKey: string) {
   fail(contentError, "讀取核准教材");
 
   return {
+    name: unit.name,
     rules: unit.teaching_rules,
     contents: (contents ?? []).map(content => ({ title: content.title, body: content.body, type: content.type })),
   };
+}
+
+/** 僅提供學生端選單所需的已核准公開名稱；不得回傳教師規則或草稿。 */
+export async function listApprovedStudentUnits() {
+  const { data, error } = await getSupabaseServerClient()
+    .from("teacher_units")
+    .select("grade, unit_key, name")
+    .eq("is_approved", true)
+    .order("grade", { ascending: true })
+    .order("unit_key", { ascending: true })
+    .returns<StudentUnitRow[]>();
+  fail(error, "讀取學生可用單元");
+  return (data ?? []).map(unit => ({ grade: unit.grade, key: unit.unit_key, label: unit.name }));
+}
+
+/** 只用於確認非核心自訂單元是否已核准可供學生解題。 */
+export async function getApprovedStudentUnit(grade: Grade, unitKey: string) {
+  const { data, error } = await getSupabaseServerClient()
+    .from("teacher_units")
+    .select("grade, unit_key, name")
+    .eq("grade", grade)
+    .eq("unit_key", unitKey)
+    .eq("is_approved", true)
+    .maybeSingle<StudentUnitRow>();
+  fail(error, "確認學生可用單元");
+  return data ? { grade: data.grade, key: data.unit_key, label: data.name } : undefined;
+}
+
+export async function getTeacherUnitByKey(grade: Grade, unitKey: string) {
+  const { data, error } = await getSupabaseServerClient()
+    .from("teacher_units")
+    .select("id, grade, unit_key, name, teaching_rules, is_approved, version")
+    .eq("grade", grade)
+    .eq("unit_key", unitKey)
+    .maybeSingle<TeacherUnitRow>();
+  fail(error, "確認教師單元");
+  return data ? unitView(data) : undefined;
 }
 
 export async function listTeacherUnits() {

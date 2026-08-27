@@ -8,7 +8,8 @@ import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
 
 const Review = lazy(() => import("./pages/Review"));
-const TeacherWorkspace = lazy(() => import("./pages/TeacherWorkspace"));
+const TeacherWorkspace = lazy(() => import("./pages/TeacherWorkspaceNext"));
+const ResetPassword = lazy(() => import("./pages/ResetPassword"));
 
 function DeferredPage({ children }: { children: React.ReactNode }) {
   return <Suspense fallback={<div className="flex min-h-screen items-center justify-center bg-[#f7f8f5] text-sm text-slate-500">正在載入學習工具…</div>}>{children}</Suspense>;
@@ -21,6 +22,7 @@ function Router() {
       <Route path={"/"} component={Home} />
       <Route path={"/review"}>{() => <DeferredPage><Review /></DeferredPage>}</Route>
       <Route path={"/teacher"}>{() => <DeferredPage><TeacherWorkspace /></DeferredPage>}</Route>
+      <Route path={"/reset-password"}>{() => <DeferredPage><ResetPassword /></DeferredPage>}</Route>
       <Route path={"/404"} component={NotFound} />
       {/* Final fallback route */}
       <Route component={NotFound} />

@@ -49,3 +49,6 @@
 - [x] 提供可自動驗證 Vite proxy 至 Express tRPC 健康回應的本機檢查腳本
 - [x] 在乾淨 clone 中以唯讀方式驗證遠端 Supabase migration 的核心 schema、額度 RPC 與 Auth bootstrap trigger
 - [x] 依部署環境選擇 Vite 靜態輸出目錄，使 Vercel 使用 public 且受管預覽維持 dist/public
+- [x] 讓教師工作台可新增並管理自訂解題教學單元
+- [x] 新增 Supabase Email＋Password 自助註冊、首次驗證信、密碼登入與安全登出流程
+- [ ] 驗證新使用者可自行註冊並取得最低權限 student profile／app_users，且教師角色只能由受保護資料庫調整
