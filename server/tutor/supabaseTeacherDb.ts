@@ -203,6 +203,19 @@ export async function upsertTeacherUnit(input: {
   return data.id;
 }
 
+/** 讓教材可直接歸屬既有核心單元；首次加入時建立可由教師再編輯的初始規則版本。 */
+export async function ensureTeacherUnitForContent(input: { grade: Grade; unitKey: string; name: string }) {
+  const existing = await getTeacherUnitByKey(input.grade, input.unitKey);
+  if (existing) return existing.id;
+  return upsertTeacherUnit({
+    grade: input.grade,
+    unitKey: input.unitKey,
+    name: input.name,
+    teachingRules: "先請學生說出已知條件與要求的未知量；以提示引導學生完成推理；完整步驟要說明每一步理由，並以代入或合理性檢查驗算。",
+    isApproved: true,
+  });
+}
+
 export async function addApprovedContent(input: {
   unitId: string;
   type: "concept" | "example" | "misconception" | "rubric";

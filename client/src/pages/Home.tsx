@@ -5,12 +5,12 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { trpc } from "@/lib/trpc";
 import { CORE_UNITS, GRADE_LABELS, MODE_LABELS, type Grade, type TutorMode } from "../../../shared/mathCurriculum";
-import { AlertCircle, ArrowRight, BadgeCheck, BookOpenCheck, CheckCircle2, CircleHelp, Clock3, FileWarning, GraduationCap, Lightbulb, Loader2, LogOut, NotebookPen, ShieldCheck, Sparkles, Upload, UserRoundCheck } from "lucide-react";
+import { AlertCircle, ArrowRight, BadgeCheck, BookOpenCheck, CheckCircle2, CircleHelp, Clock3, FileWarning, GraduationCap, Lightbulb, Loader2, LogOut, NotebookPen, ShieldCheck, Sparkles, Tag, Upload, UserRoundCheck } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Link } from "wouter";
 
-type PendingAttachment = { file: File; preview: string; normalizedDataUrl: string; quality: PhotoQuality; attachmentId?: string };
+type PendingAttachment = { file: File; kind: "image" | "pdf" | "text"; preview?: string; normalizedDataUrl?: string; quality: PhotoQuality; attachmentId?: string };
 type LastAttempt = { id: string; variationQuestion: string; confidence: number; needsClarification: boolean };
 type LearningAttempt = { id: string; questionText: string; confidence: number; errorTags: string; needsClarification: boolean };
 
@@ -68,6 +68,15 @@ function prepareHandwrittenPhoto(file: File) {
   });
 }
 
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("題目檔案讀取失敗。"));
+    reader.onerror = () => reject(new Error("題目檔案讀取失敗，請重新選擇檔案。"));
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function Home() {
   const { user, loading, isAuthenticated, logout } = useAuth();
   const [grade, setGrade] = useState<Grade>("seven");
@@ -91,6 +100,10 @@ export default function Home() {
   const solve = trpc.tutor.solve.useMutation();
   const reportConcern = trpc.tutor.reportConcern.useMutation();
   const savePractice = trpc.tutor.savePractice.useMutation();
+  const markMistake = trpc.tutor.markMistake.useMutation({
+    onSuccess: () => { toast.success("已把這題標記為常犯錯題；可到錯題循環建立二次練習。", { icon: <Tag className="size-4" /> }); void history.refetch(); },
+    onError: error => toast.error(error.message || "暫時無法標記錯題，請稍後再試。"),
+  });
 
   useEffect(() => {
     if (!units.some(item => item.key === unitKey)) setUnitKey(units[0].key);
@@ -108,30 +121,45 @@ export default function Home() {
   };
 
   const selectAttachment = async (file: File) => {
-    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
-      toast.error("請上傳 JPEG、PNG 或 WebP 格式的題目照片。");
-      return;
-    }
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error("題目照片需小於 5MB，請壓縮或重新拍攝。");
-      return;
-    }
     try {
-      const prepared = await prepareHandwrittenPhoto(file);
-      setAttachment({ file, ...prepared });
-      setRecognitionDraft("");
-      toast.success("已完成照片品質預檢與自動清晰化。請先辨識並核對題目。", { icon: <BadgeCheck className="size-4" /> });
+      if (["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+        if (file.size > 5 * 1024 * 1024) return toast.error("題目照片需小於 5MB，請壓縮或重新拍攝。");
+        const prepared = await prepareHandwrittenPhoto(file);
+        setAttachment({ file, kind: "image", ...prepared });
+        setRecognitionDraft("");
+        toast.success("已完成照片品質預檢與自動清晰化。請先辨識並核對題目。", { icon: <BadgeCheck className="size-4" /> });
+        return;
+      }
+      if (file.type === "application/pdf") {
+        if (file.size > 3 * 1024 * 1024) return toast.error("PDF 題目檔需小於 3MB，請只保留題目頁面後再匯入。");
+        setAttachment({ file, kind: "pdf", normalizedDataUrl: await readFileAsDataUrl(file), quality: { tone: "ready", message: "PDF 已安全匯入。可先讀取題目，再核對辨識稿後送出。" } });
+        setRecognitionDraft("");
+        toast.success("已匯入 PDF 題目檔。", { icon: <BadgeCheck className="size-4" /> });
+        return;
+      }
+      if (file.type === "text/plain" || /\.(txt|md)$/i.test(file.name)) {
+        if (file.size > 200 * 1024) return toast.error("文字題目檔需小於 200KB，請只保留單一題目內容。");
+        const text = (await file.text()).replace(/\u0000/g, "").trim().slice(0, 3500);
+        if (!text) return toast.error("文字檔沒有可讀取的題目內容，請改用照片、PDF 或直接輸入。");
+        setAttachment({ file, kind: "text", quality: { tone: "ready", message: "已讀取文字內容。請核對後可直接編輯並送出。" } });
+        setRecognitionDraft(text);
+        toast.success("已匯入文字題目，可先確認內容。", { icon: <BadgeCheck className="size-4" /> });
+        return;
+      }
+      toast.error("目前可匯入 JPEG、PNG、WebP、PDF 或 TXT 格式的題目檔案。");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "題目照片讀取失敗，請重新選擇檔案。");
+      toast.error(error instanceof Error ? error.message : "題目檔案讀取失敗，請重新選擇檔案。");
     }
   };
 
   const ensureAttachmentUploaded = async () => {
     if (!attachment) return undefined;
+    if (attachment.kind === "text") return undefined;
     if (attachment.attachmentId) return attachment.attachmentId;
+    if (!attachment.normalizedDataUrl) throw new Error("題目檔案尚未完成處理，請重新匯入。");
     const uploaded = await uploadPhoto.mutateAsync({
-      filename: attachment.file.name.replace(/\.[a-zA-Z0-9]+$/, "") + ".jpg",
-      mimeType: "image/jpeg",
+      filename: attachment.kind === "image" ? attachment.file.name.replace(/\.[a-zA-Z0-9]+$/, "") + ".jpg" : attachment.file.name,
+      mimeType: attachment.kind === "pdf" ? "application/pdf" : "image/jpeg",
       dataUrl: attachment.normalizedDataUrl,
     });
     setAttachment(current => current ? { ...current, attachmentId: uploaded.attachmentId } : current);
@@ -140,6 +168,7 @@ export default function Home() {
 
   const recognizeHandwriting = async () => {
     if (!attachment) return;
+    if (attachment.kind === "text") return;
     if (!isAuthenticated) { toast.message("請先登入，再使用手寫題目辨識與保存功能。"); setAuthDialogOpen(true); return; }
     try {
       const attachmentId = await ensureAttachmentUploaded();
@@ -154,7 +183,7 @@ export default function Home() {
           ? { tone: "ready", message: `辨識信心 ${result.confidence}%。請核對後可直接修正辨識稿。` }
           : { tone: "warning", message: `辨識信心 ${result.confidence}%。${result.clarification || result.cropHint || "請補拍後再試。"}` },
       } : current);
-      if (result.isReadable) toast.success("已產生可編輯辨識稿，請核對題目再送出。");
+      if (result.isReadable) toast.success(attachment.kind === "pdf" ? "已讀取 PDF 題目，可先核對辨識稿再送出。" : "已產生可編輯辨識稿，請核對題目再送出。");
       else toast.message(result.clarification || "題目照片可能不完整，請依提示補拍或直接輸入。", { icon: <CircleHelp className="size-4" /> });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "手寫題目辨識暫時無法使用，請直接輸入題目。");
@@ -239,9 +268,9 @@ export default function Home() {
             <section aria-label="解題模式" className="mb-5 grid gap-2 sm:grid-cols-3">{(["guided", "step_by_step", "check"] as TutorMode[]).map(item => { const Icon = MODE_DETAILS[item].icon; const selected = mode === item; return <button key={item} onClick={() => setMode(item)} className={`rounded-2xl border p-4 text-left transition ${selected ? "border-[#196b63] bg-[#eaf6f3] shadow-[0_12px_25px_-20px_rgba(25,107,99,0.7)]" : "border-slate-200 bg-white hover:border-[#a7d4cd] hover:bg-[#fcfefd]"}`}><div className="flex items-center gap-2"><div className={`flex size-8 items-center justify-center rounded-xl ${selected ? "bg-[#196b63] text-white" : "bg-slate-100 text-slate-500"}`}><Icon className="size-4" /></div><span className="text-sm font-semibold text-slate-800">{MODE_LABELS[item]}</span></div><p className="mt-2 text-xs leading-5 text-slate-500">{MODE_DETAILS[item].description}</p></button>; })}</section>
 
             {!isAuthenticated && !loading && <div className="mb-4 flex items-start gap-3 rounded-2xl border border-[#f2dba9] bg-[#fff9ea] p-4 text-sm text-[#74511b]"><AlertCircle className="mt-0.5 size-5 shrink-0" /><p>你可以先瀏覽介面；登入後才會啟用安全上傳、品牌託管解題、錯題保存與教師協助通知。</p></div>}
-            <AIChatBox messages={messages} onSendMessage={sendQuestion} onAttachmentSelected={selectAttachment} onClearAttachment={() => { setAttachment(null); setRecognitionDraft(""); }} onRecognizePhoto={recognizeHandwriting} onAttachmentTranscriptionChange={setRecognitionDraft} attachmentName={attachment?.file.name} attachmentPreview={attachment?.preview} attachmentTranscription={recognitionDraft} photoQuality={attachment?.quality} isRecognizing={recognizePhoto.isPending} isLoading={solve.isPending || uploadPhoto.isPending} suggestedPrompts={["解 3x − 7 = 11，先給我提示", "我不懂負數相乘的規則", "幫我檢查：2(x+3)=16，我算 x=5"]} />
+            <AIChatBox messages={messages} onSendMessage={sendQuestion} onAttachmentSelected={selectAttachment} onClearAttachment={() => { setAttachment(null); setRecognitionDraft(""); }} onRecognizePhoto={recognizeHandwriting} onAttachmentTranscriptionChange={setRecognitionDraft} attachmentName={attachment?.file.name} attachmentPreview={attachment?.preview} attachmentKind={attachment?.kind} attachmentTranscription={recognitionDraft} photoQuality={attachment?.quality} isRecognizing={recognizePhoto.isPending} isLoading={solve.isPending || uploadPhoto.isPending} suggestedPrompts={["解 3x − 7 = 11，先給我提示", "我不懂負數相乘的規則", "幫我檢查：2(x+3)=16，我算 x=5"]} />
 
-            {lastAttempt && <section className="mt-5 rounded-[1.5rem] border border-[#d8ebe7] bg-[#f7fcfa] p-4 sm:p-5"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><p className="flex items-center gap-2 text-sm font-semibold text-[#173b4d]"><NotebookPen className="size-4 text-[#196b63]" />把這題變成你的學習資產</p><p className="mt-1 text-xs leading-5 text-slate-500">信心指標 {lastAttempt.confidence}%{lastAttempt.needsClarification ? "・需要補充題目資訊" : "・已完成結構化解題"}</p></div><div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => report("wrong_answer")} disabled={reportConcern.isPending} className="rounded-full border-[#eacbc2] bg-white text-[#9a4331] hover:bg-[#fff5f2]"><FileWarning className="mr-1.5 size-3.5" />回報答案問題</Button><Button size="sm" onClick={() => report("teacher_help")} disabled={reportConcern.isPending} className="rounded-full bg-[#173b4d] hover:bg-[#0f2e3d]"><GraduationCap className="mr-1.5 size-3.5" />請教師協助</Button></div></div>
+            {lastAttempt && <section className="mt-5 rounded-[1.5rem] border border-[#d8ebe7] bg-[#f7fcfa] p-4 sm:p-5"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><p className="flex items-center gap-2 text-sm font-semibold text-[#173b4d]"><NotebookPen className="size-4 text-[#196b63]" />把這題變成你的學習資產</p><p className="mt-1 text-xs leading-5 text-slate-500">信心指標 {lastAttempt.confidence}%{lastAttempt.needsClarification ? "・需要補充題目資訊" : "・已完成結構化解題"}</p></div><div className="flex max-w-full gap-2 overflow-x-auto pb-1 sm:flex-wrap"><Button size="sm" variant="outline" onClick={() => markMistake.mutate({ attemptId: lastAttempt.id, markedWrong: true })} disabled={markMistake.isPending} className="shrink-0 rounded-full border-[#d8bd79] bg-white text-[#76521a] hover:bg-[#fffaf0]"><Tag className="mr-1.5 size-3.5" />標記為常犯錯題</Button><Button size="sm" variant="outline" onClick={() => report("wrong_answer")} disabled={reportConcern.isPending} className="shrink-0 rounded-full border-[#eacbc2] bg-white text-[#9a4331] hover:bg-[#fff5f2]"><FileWarning className="mr-1.5 size-3.5" />回報答案問題</Button><Button size="sm" onClick={() => report("teacher_help")} disabled={reportConcern.isPending} className="shrink-0 rounded-full bg-[#173b4d] hover:bg-[#0f2e3d]"><GraduationCap className="mr-1.5 size-3.5" />請教師協助</Button></div></div>
               <div className="mt-4 rounded-2xl bg-white p-3 ring-1 ring-[#d8ebe7]"><p className="text-xs font-semibold text-[#196b63]">變式練習</p><p className="mt-1 text-sm leading-6 text-slate-700">{lastAttempt.variationQuestion}</p><Textarea value={practiceAnswer} onChange={event => setPracticeAnswer(event.target.value)} placeholder="可先寫下你的答案或思路，之後再回來檢查。" className="mt-3 min-h-20 border-slate-200 text-sm" /><div className="mt-3 flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => saveVariation("not_attempted")} disabled={savePractice.isPending} className="rounded-full">稍後練習</Button><Button size="sm" variant="outline" onClick={() => saveVariation("needs_review")} disabled={savePractice.isPending} className="rounded-full">完成，請幫我回顧</Button><Button size="sm" onClick={() => saveVariation("correct")} disabled={savePractice.isPending} className="rounded-full bg-[#196b63] hover:bg-[#115950]">我已完成</Button></div></div>
             </section>}
           </div>

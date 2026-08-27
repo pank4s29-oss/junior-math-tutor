@@ -4,7 +4,7 @@ export const GEMINI_TUTOR_MODEL = "gemini-3.6-flash";
 
 export type GeminiInlineImage = {
   data: string;
-  mimeType: "image/jpeg" | "image/png" | "image/webp";
+  mimeType: "image/jpeg" | "image/png" | "image/webp" | "application/pdf";
 };
 
 type GeminiStructuredRequest = {
@@ -23,7 +23,7 @@ function getGeminiClient() {
 
 /**
  * 只在伺服器執行的 Gemini 結構化輸出封裝。呼叫者不得把 API 金鑰或
- * Supabase 簽名網址傳入瀏覽器；圖片以已授權讀取後的 inline bytes 提供。
+ * Supabase 簽名網址傳入瀏覽器；圖片或 PDF 以已授權讀取後的 inline bytes 提供。
  */
 export async function generateGeminiJson(request: GeminiStructuredRequest): Promise<string> {
   try {

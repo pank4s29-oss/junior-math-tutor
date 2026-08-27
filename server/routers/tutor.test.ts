@@ -8,12 +8,12 @@ const UUIDS = {
 };
 
 const mocks = vi.hoisted(() => ({
-  generateGeminiJson: vi.fn(), getOrCreateAppUser: vi.fn(), assertSupabaseAdmin: vi.fn(), consumeSolveQuota: vi.fn(), uploadMathPhoto: vi.fn(), getAttachmentForUser: vi.fn(), downloadMathPhoto: vi.fn(), updateAttachmentRecognition: vi.fn(), createConversation: vi.fn(), getConversationForUser: vi.fn(), createMathAttempt: vi.fn(), listRecentAttempts: vi.fn(), listPracticeHistory: vi.fn(), getAttemptForUser: vi.fn(), savePracticeResult: vi.fn(), createEscalation: vi.fn(), listEscalations: vi.fn(), updateEscalationStatus: vi.fn(), getTutorContext: vi.fn(), listApprovedStudentUnits: vi.fn(), getApprovedStudentUnit: vi.fn(), getTeacherUnitByKey: vi.fn(), listTeacherUnits: vi.fn(), listTeacherContents: vi.fn(), upsertTeacherUnit: vi.fn(), addApprovedContent: vi.fn(),
+  generateGeminiJson: vi.fn(), getOrCreateAppUser: vi.fn(), assertSupabaseAdmin: vi.fn(), consumeSolveQuota: vi.fn(), uploadMathPhoto: vi.fn(), getAttachmentForUser: vi.fn(), downloadMathPhoto: vi.fn(), updateAttachmentRecognition: vi.fn(), createConversation: vi.fn(), getConversationForUser: vi.fn(), createMathAttempt: vi.fn(), listRecentAttempts: vi.fn(), listPracticeHistory: vi.fn(), getAttemptForUser: vi.fn(), markAttemptAsMistake: vi.fn(), getMarkedAttemptForPractice: vi.fn(), savePracticeResult: vi.fn(), createEscalation: vi.fn(), listEscalations: vi.fn(), updateEscalationStatus: vi.fn(), getTutorContext: vi.fn(), listApprovedStudentUnits: vi.fn(), getApprovedStudentUnit: vi.fn(), getTeacherUnitByKey: vi.fn(), ensureTeacherUnitForContent: vi.fn(), listTeacherUnits: vi.fn(), listTeacherContents: vi.fn(), upsertTeacherUnit: vi.fn(), addApprovedContent: vi.fn(),
 }));
 
 vi.mock("../tutor/gemini", () => ({ GEMINI_TUTOR_MODEL: "gemini-3.6-flash", generateGeminiJson: mocks.generateGeminiJson }));
-vi.mock("../tutor/supabaseDb", () => ({ getOrCreateAppUser: mocks.getOrCreateAppUser, assertSupabaseAdmin: mocks.assertSupabaseAdmin, consumeSolveQuota: mocks.consumeSolveQuota, uploadMathPhoto: mocks.uploadMathPhoto, getAttachmentForUser: mocks.getAttachmentForUser, downloadMathPhoto: mocks.downloadMathPhoto, updateAttachmentRecognition: mocks.updateAttachmentRecognition, createConversation: mocks.createConversation, getConversationForUser: mocks.getConversationForUser, createMathAttempt: mocks.createMathAttempt, listRecentAttempts: mocks.listRecentAttempts, listPracticeHistory: mocks.listPracticeHistory, getAttemptForUser: mocks.getAttemptForUser, savePracticeResult: mocks.savePracticeResult, createEscalation: mocks.createEscalation, listEscalations: mocks.listEscalations, updateEscalationStatus: mocks.updateEscalationStatus }));
-vi.mock("../tutor/supabaseTeacherDb", () => ({ getTutorContext: mocks.getTutorContext, listApprovedStudentUnits: mocks.listApprovedStudentUnits, getApprovedStudentUnit: mocks.getApprovedStudentUnit, getTeacherUnitByKey: mocks.getTeacherUnitByKey, listTeacherUnits: mocks.listTeacherUnits, listTeacherContents: mocks.listTeacherContents, upsertTeacherUnit: mocks.upsertTeacherUnit, addApprovedContent: mocks.addApprovedContent }));
+vi.mock("../tutor/supabaseDb", () => ({ getOrCreateAppUser: mocks.getOrCreateAppUser, assertSupabaseAdmin: mocks.assertSupabaseAdmin, consumeSolveQuota: mocks.consumeSolveQuota, uploadMathPhoto: mocks.uploadMathPhoto, getAttachmentForUser: mocks.getAttachmentForUser, downloadMathPhoto: mocks.downloadMathPhoto, updateAttachmentRecognition: mocks.updateAttachmentRecognition, createConversation: mocks.createConversation, getConversationForUser: mocks.getConversationForUser, createMathAttempt: mocks.createMathAttempt, listRecentAttempts: mocks.listRecentAttempts, listPracticeHistory: mocks.listPracticeHistory, getAttemptForUser: mocks.getAttemptForUser, markAttemptAsMistake: mocks.markAttemptAsMistake, getMarkedAttemptForPractice: mocks.getMarkedAttemptForPractice, savePracticeResult: mocks.savePracticeResult, createEscalation: mocks.createEscalation, listEscalations: mocks.listEscalations, updateEscalationStatus: mocks.updateEscalationStatus }));
+vi.mock("../tutor/supabaseTeacherDb", () => ({ getTutorContext: mocks.getTutorContext, listApprovedStudentUnits: mocks.listApprovedStudentUnits, getApprovedStudentUnit: mocks.getApprovedStudentUnit, getTeacherUnitByKey: mocks.getTeacherUnitByKey, ensureTeacherUnitForContent: mocks.ensureTeacherUnitForContent, listTeacherUnits: mocks.listTeacherUnits, listTeacherContents: mocks.listTeacherContents, upsertTeacherUnit: mocks.upsertTeacherUnit, addApprovedContent: mocks.addApprovedContent }));
 
 import { tutorRouter, validatePhotoDataUrl } from "./tutor";
 
@@ -27,6 +27,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.getOrCreateAppUser.mockResolvedValue({ id: UUIDS.appUser, role: "student" }); mocks.assertSupabaseAdmin.mockResolvedValue({ id: UUIDS.appUser, role: "admin" }); mocks.consumeSolveQuota.mockResolvedValue({ allowed: true, remaining: 18 }); mocks.getTutorContext.mockResolvedValue({ rules: "先問學生已知條件。", contents: [] }); mocks.listApprovedStudentUnits.mockResolvedValue([]); mocks.getApprovedStudentUnit.mockResolvedValue(undefined); mocks.getTeacherUnitByKey.mockResolvedValue(undefined); mocks.createConversation.mockResolvedValue(UUIDS.conversation); mocks.createMathAttempt.mockResolvedValue(UUIDS.attempt); mocks.generateGeminiJson.mockResolvedValue(JSON.stringify(readySolution));
   mocks.getAttemptForUser.mockResolvedValue(UUIDS.attempt);
+  mocks.markAttemptAsMistake.mockResolvedValue({ id: UUIDS.attempt, studentMarkedWrong: true, studentMistakeNote: "移項符號", studentMarkedWrongAt: "2026-08-27T00:00:00.000Z" });
+  mocks.getMarkedAttemptForPractice.mockResolvedValue({ id: UUIDS.attempt, variationQuestion: readySolution.variationQuestion });
+  mocks.ensureTeacherUnitForContent.mockResolvedValue(UUIDS.unit);
   mocks.getConversationForUser.mockResolvedValue(UUIDS.conversation);
 });
 
@@ -38,7 +41,7 @@ describe("Supabase 國中數學解題路由", () => {
     expect(result.units.seven.at(-1)).toEqual({ key: "probability-tree", label: "樹狀圖與條件機率" });
     expect(result.units.eight.find(unit => unit.key === "polynomials")).toEqual({ key: "polynomials", label: "多項式進階" });
   });
-  it("接受安全圖片資料並拒絕格式偽裝", () => { expect(validatePhotoDataUrl("data:image/png;base64,aGVsbG8=", "image/png").toString()).toBe("hello"); expect(() => validatePhotoDataUrl("data:image/gif;base64,aGVsbG8=", "image/png")).toThrow("JPEG、PNG 或 WebP"); });
+  it("接受安全圖片與小型 PDF 資料，並拒絕格式偽裝", () => { expect(validatePhotoDataUrl("data:image/png;base64,aGVsbG8=", "image/png").toString()).toBe("hello"); expect(validatePhotoDataUrl("data:application/pdf;base64,aGVsbG8=", "application/pdf").toString()).toBe("hello"); expect(() => validatePhotoDataUrl("data:image/gif;base64,aGVsbG8=", "image/png")).toThrow("JPEG、PNG、WebP 或 PDF"); });
   it("在沒有題目或照片時拒絕模型呼叫", async () => { await expect(caller().solve({ question: "", grade: "seven", unitKey: "linear-equations", mode: "guided" })).rejects.toThrow("請輸入題目"); expect(mocks.generateGeminiJson).not.toHaveBeenCalled(); });
   it("拒絕未核准的自訂單元，且不耗用學生解題額度", async () => {
     await expect(caller().solve({ question: "求 x", grade: "seven", unitKey: "draft-probability", mode: "guided" })).rejects.toThrow("尚未核准");
@@ -57,10 +60,32 @@ describe("Supabase 國中數學解題路由", () => {
   it("不允許學生 A 讀取或引用學生 B 的私有附件、解題、練習與案件", async () => { const studentB = { ...student, id: 13, openId: "student-13", email: "student-b@example.com" }; const otherId = "99999999-9999-4999-8999-999999999999"; mocks.getOrCreateAppUser.mockImplementation(async (user: { id: number }) => ({ id: user.id === 12 ? UUIDS.appUser : otherId, role: "student" })); mocks.getAttachmentForUser.mockResolvedValue(undefined); mocks.getAttemptForUser.mockResolvedValue(undefined); const studentBCaller = tutorRouter.createCaller({ user: studentB } as never); await expect(studentBCaller.recognizePhoto({ attachmentId: UUIDS.attachment })).rejects.toThrow("找不到這張題目照片"); await expect(studentBCaller.savePractice({ sourceAttemptId: UUIDS.attempt, question: "他人的題目", status: "incorrect" })).rejects.toThrow("找不到這筆解題紀錄"); await expect(studentBCaller.reportConcern({ attemptId: UUIDS.attempt, reason: "wrong_answer" })).rejects.toThrow("找不到這筆解題紀錄"); expect(mocks.downloadMathPhoto).not.toHaveBeenCalled(); expect(mocks.savePracticeResult).not.toHaveBeenCalled(); expect(mocks.createEscalation).not.toHaveBeenCalled(); });
   it("不允許學生 A 以學生 B 的 conversationId 延續解題", async () => { const studentB = { ...student, id: 13, openId: "student-13", email: "student-b@example.com" }; mocks.getConversationForUser.mockResolvedValue(undefined); await expect(tutorRouter.createCaller({ user: studentB } as never).solve({ question: "x + 2 = 8", grade: "seven", unitKey: "linear-equations", mode: "guided", conversationId: UUIDS.conversation })).rejects.toThrow("找不到這個解題對話"); expect(mocks.generateGeminiJson).not.toHaveBeenCalled(); expect(mocks.createMathAttempt).not.toHaveBeenCalled(); });
   it("保存變式練習與教師協助案件至 Supabase", async () => { mocks.savePracticeResult.mockResolvedValue(UUIDS.practice); mocks.createEscalation.mockResolvedValue(UUIDS.escalation); await expect(caller().savePractice({ sourceAttemptId: UUIDS.attempt, question: "4x + 5 = 21", studentAnswer: "x=4", status: "correct" })).resolves.toBe(UUIDS.practice); await expect(caller().reportConcern({ attemptId: UUIDS.attempt, reason: "teacher_help" })).resolves.toEqual({ escalationId: UUIDS.escalation, notified: false }); expect(mocks.createEscalation).toHaveBeenCalledWith(expect.objectContaining({ userId: UUIDS.appUser, attemptId: UUIDS.attempt, notificationDelivered: false })); });
+  it("學生可標記自己的常犯錯題並從標記題目建立二次變式練習", async () => {
+    mocks.savePracticeResult.mockResolvedValue(UUIDS.practice);
+    await expect(caller().markMistake({ attemptId: UUIDS.attempt, markedWrong: true, mistakeNote: "移項時忘記變號" })).resolves.toMatchObject({ studentMarkedWrong: true });
+    expect(mocks.markAttemptAsMistake).toHaveBeenCalledWith(expect.objectContaining({ userId: UUIDS.appUser, attemptId: UUIDS.attempt, markedWrong: true }));
+    await expect(caller().createMarkedPractice({ attemptId: UUIDS.attempt })).resolves.toEqual({ practiceId: UUIDS.practice, question: readySolution.variationQuestion });
+    expect(mocks.savePracticeResult).toHaveBeenCalledWith(expect.objectContaining({ userId: UUIDS.appUser, sourceAttemptId: UUIDS.attempt, status: "not_attempted" }));
+  });
+  it("不允許以他人紀錄建立錯題標記或二次練習", async () => {
+    const studentB = { ...student, id: 13, openId: "student-13", email: "student-b@example.com" };
+    mocks.getOrCreateAppUser.mockResolvedValue({ id: "99999999-9999-4999-8999-999999999999", role: "student" });
+    mocks.markAttemptAsMistake.mockResolvedValue(undefined);
+    mocks.getMarkedAttemptForPractice.mockResolvedValue(undefined);
+    const otherCaller = tutorRouter.createCaller({ user: studentB } as never);
+    await expect(otherCaller.markMistake({ attemptId: UUIDS.attempt, markedWrong: true })).rejects.toThrow("找不到這筆解題紀錄");
+    await expect(otherCaller.createMarkedPractice({ attemptId: UUIDS.attempt })).rejects.toThrow("請先把這筆紀錄標記");
+  });
   it("管理者讀取與更新 Supabase 教師資料，非管理者會被拒絕", async () => { mocks.listTeacherUnits.mockResolvedValue([{ id: UUIDS.unit }]); mocks.listTeacherContents.mockResolvedValue([{ id: UUIDS.content }]); mocks.listEscalations.mockResolvedValue([{ id: UUIDS.escalation }]); const admin = adminCaller(); await expect(admin.teacher.listUnits()).resolves.toHaveLength(1); await expect(admin.teacher.listContents()).resolves.toHaveLength(1); await expect(admin.teacher.listEscalations()).resolves.toHaveLength(1); await expect(admin.teacher.updateEscalationStatus({ id: UUIDS.escalation, status: "resolved" })).resolves.toBeUndefined(); expect(mocks.assertSupabaseAdmin).toHaveBeenCalled(); await expect(caller().teacher.listUnits()).rejects.toThrow(); });
   it("教師可管理單元，但新增自訂代碼遇到同年級重複項目時會被拒絕", async () => {
     mocks.getTeacherUnitByKey.mockResolvedValue({ id: UUIDS.unit, grade: "seven", unitKey: "probability-tree" });
     await expect(teacherCaller().teacher.upsertUnit({ grade: "seven", unitKey: "probability-tree", name: "樹狀圖", teachingRules: "先確認抽取順序與是否放回，再逐支標示機率並核對所有分支總和。", isApproved: false, createOnly: true })).rejects.toThrow("已有相同單元代碼");
     expect(mocks.upsertTeacherUnit).not.toHaveBeenCalled();
+  });
+  it("教師可將教材精確歸屬到指定核心或自訂單元", async () => {
+    mocks.addApprovedContent.mockResolvedValue(UUIDS.content);
+    await expect(teacherCaller().teacher.addApprovedContent({ grade: "seven", unitKey: "linear-equations", unitName: "一元一次方程式", type: "example", title: "移項練習", body: "先把未知數項留在等號左邊，常數項移到右邊，再逐步驗算答案。", isApproved: true })).resolves.toBe(UUIDS.content);
+    expect(mocks.ensureTeacherUnitForContent).toHaveBeenCalledWith({ grade: "seven", unitKey: "linear-equations", name: "一元一次方程式" });
+    expect(mocks.addApprovedContent).toHaveBeenCalledWith(expect.objectContaining({ unitId: UUIDS.unit, type: "example" }));
   });
 });

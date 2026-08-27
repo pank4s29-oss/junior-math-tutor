@@ -9,7 +9,7 @@ import { adminProcedure, protectedProcedure, router } from "../_core/trpc";
 
 const gradeSchema = z.enum(GRADES);
 const modeSchema = z.enum(MODES);
-const attachmentTypes = ["image/jpeg", "image/png", "image/webp"] as const;
+const attachmentTypes = ["image/jpeg", "image/png", "image/webp", "application/pdf"] as const;
 const uuidSchema = z.string().uuid();
 const unitKeySchema = z.string().trim().regex(/^[a-z][a-z0-9-]{1,79}$/, "單元代碼請使用小寫英文、數字與連字號，並以英文字母開頭。");
 
@@ -51,10 +51,11 @@ export function mergeStudentCurriculum(approvedUnits: Array<{ grade: Grade; key:
 }
 
 export function validatePhotoDataUrl(dataUrl: string, mimeType: string) {
-  const match = dataUrl.match(/^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/);
-  if (!match || match[1] !== mimeType) throw new TRPCError({ code: "BAD_REQUEST", message: "請上傳 JPEG、PNG 或 WebP 格式的題目照片。" });
+  const match = dataUrl.match(/^data:((?:image\/(?:jpeg|png|webp))|application\/pdf);base64,([A-Za-z0-9+/=]+)$/);
+  if (!match || match[1] !== mimeType) throw new TRPCError({ code: "BAD_REQUEST", message: "請上傳 JPEG、PNG、WebP 或 PDF 格式的題目檔案。" });
   const buffer = Buffer.from(match[2], "base64");
-  if (buffer.length === 0 || buffer.length > 5 * 1024 * 1024) throw new TRPCError({ code: "PAYLOAD_TOO_LARGE", message: "題目照片需小於 5MB，請壓縮或重新拍攝。" });
+  const maxBytes = mimeType === "application/pdf" ? 3 * 1024 * 1024 : 5 * 1024 * 1024;
+  if (buffer.length === 0 || buffer.length > maxBytes) throw new TRPCError({ code: "PAYLOAD_TOO_LARGE", message: mimeType === "application/pdf" ? "PDF 題目檔需小於 3MB，請只保留題目頁面後再匯入。" : "題目照片需小於 5MB，請壓縮或重新拍攝。" });
   return buffer;
 }
 
@@ -147,6 +148,23 @@ export const tutorRouter = router({
     return tutorDb.savePracticeResult({ userId: appUser.id, ...input });
   }),
 
+  markMistake: protectedProcedure.input(z.object({
+    attemptId: uuidSchema, markedWrong: z.boolean(), mistakeNote: z.string().trim().max(600).optional(),
+  })).mutation(async ({ ctx, input }) => {
+    const appUser = await tutorDb.getOrCreateAppUser(ctx.user);
+    const result = await tutorDb.markAttemptAsMistake({ userId: appUser.id, ...input });
+    if (!result) throw new TRPCError({ code: "NOT_FOUND", message: "找不到這筆解題紀錄。" });
+    return result;
+  }),
+
+  createMarkedPractice: protectedProcedure.input(z.object({ attemptId: uuidSchema })).mutation(async ({ ctx, input }) => {
+    const appUser = await tutorDb.getOrCreateAppUser(ctx.user);
+    const source = await tutorDb.getMarkedAttemptForPractice(appUser.id, input.attemptId);
+    if (!source) throw new TRPCError({ code: "NOT_FOUND", message: "請先把這筆紀錄標記為常犯錯題，再建立二次練習。" });
+    const practiceId = await tutorDb.savePracticeResult({ userId: appUser.id, sourceAttemptId: source.id, question: source.variationQuestion, status: "not_attempted" });
+    return { practiceId, question: source.variationQuestion };
+  }),
+
   reportConcern: protectedProcedure.input(z.object({
     attemptId: uuidSchema, reason: z.enum(["wrong_answer", "unclear_photo", "teacher_help", "safety_concern"]), detail: z.string().trim().max(1200).optional(),
   })).mutation(async ({ ctx, input }) => {
@@ -168,7 +186,16 @@ export const tutorRouter = router({
       }
       return supabaseTeacherDb.upsertTeacherUnit(input);
     }),
-    addApprovedContent: adminProcedure.input(z.object({ unitId: uuidSchema, type: z.enum(["concept", "example", "misconception", "rubric"]), title: z.string().trim().min(1).max(200), body: z.string().trim().min(20).max(12000), isApproved: z.boolean() })).mutation(async ({ ctx, input }) => { await tutorDb.assertSupabaseAdmin(ctx.user); return supabaseTeacherDb.addApprovedContent(input); }),
+    addApprovedContent: adminProcedure.input(z.union([
+      z.object({ grade: gradeSchema, unitKey: unitKeySchema, unitName: z.string().trim().min(1).max(160), type: z.enum(["concept", "example", "misconception", "rubric"]), title: z.string().trim().min(1).max(200), body: z.string().trim().min(20).max(12000), isApproved: z.boolean() }),
+      z.object({ unitId: uuidSchema, type: z.enum(["concept", "example", "misconception", "rubric"]), title: z.string().trim().min(1).max(200), body: z.string().trim().min(20).max(12000), isApproved: z.boolean() }),
+    ])).mutation(async ({ ctx, input }) => {
+      await tutorDb.assertSupabaseAdmin(ctx.user);
+      const unitId = "unitId" in input
+        ? input.unitId
+        : await supabaseTeacherDb.ensureTeacherUnitForContent({ grade: input.grade, unitKey: input.unitKey, name: input.unitName });
+      return supabaseTeacherDb.addApprovedContent({ unitId, type: input.type, title: input.title, body: input.body, isApproved: input.isApproved });
+    }),
     updateEscalationStatus: adminProcedure.input(z.object({ id: uuidSchema, status: z.enum(["new", "reviewing", "resolved"]) })).mutation(async ({ ctx, input }) => { await tutorDb.assertSupabaseAdmin(ctx.user); return tutorDb.updateEscalationStatus(input); }),
   }),
 });

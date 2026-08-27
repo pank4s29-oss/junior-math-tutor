@@ -6,7 +6,9 @@ import { getSupabaseServerClient } from "../supabase";
 const DAILY_LIMIT = 20;
 const REQUEST_COOLDOWN_MS = 3500;
 const MATH_BUCKET = "math-problems";
-const SUPPORTED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
+const SUPPORTED_ATTACHMENT_TYPES = ["image/jpeg", "image/png", "image/webp", "application/pdf"] as const;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_PDF_BYTES = 3 * 1024 * 1024;
 
 type AppUser = { id: string; role: "student" | "teacher" | "admin" };
 type AnySupabase = any;
@@ -62,7 +64,10 @@ export async function consumeSolveQuota(userId: string) {
 }
 
 export async function uploadMathPhoto(input: { userId: string; filename: string; mimeType: string; bytes: Buffer }) {
-  const safeName = input.filename.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 100) || "math-problem.jpg";
+  if (!SUPPORTED_ATTACHMENT_TYPES.includes(input.mimeType as (typeof SUPPORTED_ATTACHMENT_TYPES)[number])) throw new Error("題目檔案格式不受支援。");
+  const maxBytes = input.mimeType === "application/pdf" ? MAX_PDF_BYTES : MAX_IMAGE_BYTES;
+  if (input.bytes.length === 0 || input.bytes.length > maxBytes) throw new Error("題目檔案大小不符合處理限制。");
+  const safeName = input.filename.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 100) || "math-problem";
   const storagePath = `${input.userId}/${Date.now()}-${nanoid(10)}-${safeName}`;
   const { error: uploadError } = await supabase().storage.from(MATH_BUCKET).upload(storagePath, input.bytes, {
     contentType: input.mimeType,
@@ -102,17 +107,18 @@ export async function getAttachmentForUser(userId: string, attachmentId: string)
 
 /** 僅由已通過附件擁有權檢查的伺服器端流程呼叫。 */
 export async function downloadMathPhoto(storagePath: string, mimeType: string) {
-  if (!SUPPORTED_IMAGE_TYPES.includes(mimeType as (typeof SUPPORTED_IMAGE_TYPES)[number])) {
-    throw new Error("題目照片格式不受支援。");
+  if (!SUPPORTED_ATTACHMENT_TYPES.includes(mimeType as (typeof SUPPORTED_ATTACHMENT_TYPES)[number])) {
+    throw new Error("題目檔案格式不受支援。");
   }
   const { data, error } = await supabase().storage.from(MATH_BUCKET).download(storagePath);
   fail(error, "讀取私有題目照片");
-  if (!data) throw new Error("找不到私有題目照片內容。");
+  if (!data) throw new Error("找不到私有題目檔案內容。");
   const bytes = Buffer.from(await data.arrayBuffer());
-  if (bytes.length === 0 || bytes.length > 5 * 1024 * 1024) throw new Error("題目照片大小不符合處理限制。");
+  const maxBytes = mimeType === "application/pdf" ? MAX_PDF_BYTES : MAX_IMAGE_BYTES;
+  if (bytes.length === 0 || bytes.length > maxBytes) throw new Error("題目檔案大小不符合處理限制。");
   return {
     data: bytes.toString("base64"),
-    mimeType: mimeType as "image/jpeg" | "image/png" | "image/webp",
+    mimeType: mimeType as (typeof SUPPORTED_ATTACHMENT_TYPES)[number],
   };
 }
 
@@ -164,13 +170,14 @@ export async function createMathAttempt(input: {
 
 export async function listRecentAttempts(userId: string) {
   const { data, error } = await supabase().from("math_attempts")
-    .select("id, question_text, unit_key, mode, confidence, error_tags, needs_clarification, created_at")
-    .eq("user_id", userId).order("created_at", { ascending: false }).limit(10);
+    .select("id, question_text, unit_key, mode, confidence, error_tags, needs_clarification, student_marked_wrong, student_mistake_note, student_marked_wrong_at, created_at")
+    .eq("user_id", userId).order("created_at", { ascending: false }).limit(30);
   fail(error, "讀取解題紀錄");
   return (data ?? []).map((row: any) => ({
     id: String(row.id), questionText: row.question_text, unitKey: row.unit_key, mode: row.mode,
     confidence: row.confidence, errorTags: JSON.stringify(row.error_tags ?? []),
-    needsClarification: row.needs_clarification, createdAt: row.created_at,
+    needsClarification: row.needs_clarification, studentMarkedWrong: Boolean(row.student_marked_wrong),
+    studentMistakeNote: row.student_mistake_note ?? null, studentMarkedWrongAt: row.student_marked_wrong_at ?? null, createdAt: row.created_at,
   }));
 }
 
@@ -179,6 +186,41 @@ export async function getAttemptForUser(userId: string, attemptId: string) {
     .select("id").eq("id", attemptId).eq("user_id", userId).maybeSingle();
   fail(error, "驗證解題紀錄擁有權");
   return data ? String(data.id) : undefined;
+}
+
+export async function markAttemptAsMistake(input: { userId: string; attemptId: string; markedWrong: boolean; mistakeNote?: string }) {
+  const { data, error } = await supabase().from("math_attempts")
+    .update({
+      student_marked_wrong: input.markedWrong,
+      student_mistake_note: input.markedWrong && input.mistakeNote?.trim() ? input.mistakeNote.trim() : null,
+      student_marked_wrong_at: input.markedWrong ? new Date().toISOString() : null,
+    })
+    .eq("id", input.attemptId).eq("user_id", input.userId)
+    .select("id, student_marked_wrong, student_mistake_note, student_marked_wrong_at")
+    .maybeSingle();
+  fail(error, "更新錯題標記");
+  return data ? {
+    id: String(data.id), studentMarkedWrong: Boolean(data.student_marked_wrong),
+    studentMistakeNote: data.student_mistake_note ?? null, studentMarkedWrongAt: data.student_marked_wrong_at ?? null,
+  } : undefined;
+}
+
+export async function getMarkedAttemptForPractice(userId: string, attemptId: string) {
+  const { data, error } = await supabase().from("math_attempts")
+    .select("id, response_json")
+    .eq("id", attemptId).eq("user_id", userId).eq("student_marked_wrong", true)
+    .maybeSingle();
+  fail(error, "讀取標記錯題");
+  if (!data) return undefined;
+  const response = typeof data.response_json === "string" ? safeJsonParse(data.response_json) : data.response_json;
+  const variationQuestion = response && typeof response === "object" && typeof (response as Record<string, unknown>).variationQuestion === "string"
+    ? (response as Record<string, string>).variationQuestion.trim().slice(0, 2000)
+    : "";
+  return variationQuestion ? { id: String(data.id), variationQuestion } : undefined;
+}
+
+function safeJsonParse(value: string): unknown {
+  try { return JSON.parse(value); } catch { return undefined; }
 }
 
 export async function savePracticeResult(input: { userId: string; sourceAttemptId: string; question: string; studentAnswer?: string; status: "not_attempted" | "correct" | "incorrect" | "needs_review" }) {
