@@ -47,9 +47,11 @@ try {
   if (!body.includes('"ok":true')) throw new Error("Vite proxy 未取得預期的 tRPC 健康回應。");
   console.log("Verified local portable development: Vite /api proxy → Express tRPC → { ok: true }");
 } finally {
-  for (const child of children) {
-    if (!child.pid) continue;
+  await Promise.all(children.map(child => new Promise(resolve => {
+    if (child.exitCode !== null || !child.pid) return resolve();
+    child.once("close", resolve);
     if (isWindows) child.kill("SIGTERM");
     else process.kill(-child.pid, "SIGTERM");
-  }
+    setTimeout(resolve, 2_000);
+  })));
 }
