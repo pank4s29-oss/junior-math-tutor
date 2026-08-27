@@ -19,4 +19,17 @@ describe("Vercel 相容 tRPC API 應用程式", () => {
     expect(response.ok).toBe(true);
     await expect(response.json()).resolves.toEqual([{ result: { data: { json: { ok: true } } } }]);
   });
+
+  it("將非 API 深層連結回退到 Vite 首頁，但不遮蔽 API 路徑", async () => {
+    server = createServer(createApiApp());
+    await new Promise<void>(resolve => server!.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("無法取得測試 API 連接埠。");
+
+    const home = await fetch(`http://127.0.0.1:${address.port}/review`);
+    const missingApi = await fetch(`http://127.0.0.1:${address.port}/api/not-a-route`);
+    expect(home.status).toBe(200);
+    expect(await home.text()).toContain("國中數學解題教練");
+    expect(missingApi.status).toBe(404);
+  });
 });

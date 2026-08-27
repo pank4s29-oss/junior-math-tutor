@@ -2,10 +2,9 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "pnpm build:client",
   "outputDirectory": "public",
-  "rewrites": [
-    {
-      "source": "/((?!api/).*)",
-      "destination": "/index.html"
+  "functions": {
+    "server.ts": {
+      "includeFiles": "public/**"
     }
-  ]
+  }
 }
