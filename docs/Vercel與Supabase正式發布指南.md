@@ -19,7 +19,7 @@ Gemini 服務使用官方 `@google/genai` SDK 與帳戶目前可用的 `gemini-3
 
 ## 2. GitHub 與 Vercel 建立專案
 
-將本 repository 的 `main` 分支推送到你的 GitHub repository 後，在 Vercel 選擇 **Add New → Project → Import Git Repository** 並匯入 `junior-math-tutor`。Vercel 會使用 `vercel.json`：建置命令是 `pnpm build:client`，輸出資料夾是 `dist/public`，而 `/api/trpc/*` 由 `api/trpc/[...path].ts` 的 Node.js Function 提供；其餘網址才回退至 `index.html`，使 `/review` 與 `/teacher` 等 SPA 深層連結可用。Vercel 支援以 default export 提供 Express application；靜態檔案則由 CDN 提供，不應倚賴 `express.static()`。[2]
+將本 repository 的 `main` 分支推送到你的 GitHub repository 後，在 Vercel 選擇 **Add New → Project → Import Git Repository** 並匯入 `junior-math-tutor`。`vercel.json` 會覆寫 Framework 為 `vite`，建置命令為 `pnpm build:client`，輸出資料夾為 `dist/public`；`/api/trpc/*` 由 `api/trpc/[...path].ts` 的 Node.js Function 提供，而其餘網址才回退至 `index.html`，使 `/review` 與 `/teacher` 等 SPA 深層連結可用。Vercel 對 Vite SPA 建議使用 rewrite 處理 deep links，而標準 Function 只需放在專案根目錄的 `api` 下。[2] [6]
 
 | Vercel Environment Variable | Development | Preview | Production | 說明 |
 |---|---:|---:|---:|---|
@@ -50,3 +50,5 @@ Gemini 服務使用官方 `@google/genai` SDK 與帳戶目前可用的 `gemini-3
 [4] [Google AI for Developers, Structured outputs](https://ai.google.dev/gemini-api/docs/structured-output)
 
 [5] [Google AI for Developers, Image understanding](https://ai.google.dev/gemini-api/docs/image-understanding)
+
+[6] [Vercel, Functions](https://vercel.com/docs/functions)
