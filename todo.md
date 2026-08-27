@@ -35,12 +35,12 @@
 - [x] 新增跨學生資料隔離自動化測試，驗證學生 A 不能讀取、辨識或引用學生 B 的附件、解題紀錄、練習與案件
 - [x] 在登入成功流程建立 Supabase Auth 對應，於 session 建立時寫入 app_users.supabase_auth_user_id
 - [x] 補上學生 A 引用學生 B conversationId 與 attemptId 時的完整隔離測試
-- [ ] 盤點並替換受管登入、AI、檔案與通知服務，建立 Vercel 可攜式相容架構
+- [ ] 完成通知服務的外部供應商選定與整合；登入、AI 與檔案已改為 Supabase／Gemini 可攜式架構
 - [x] 建立 Supabase 作為後台資料與私有檔案的正式單一來源，保留教師工作台權限與學生資料隔離
-- [ ] 將完整程式碼與部署設定同步至已連結的 GitHub repository
+- [x] 將完整程式碼與部署設定同步至已連結的 GitHub repository
 - [x] 新增 Vercel Serverless 相容層、環境變數設定文件與部署設定
 - [ ] 在 Supabase 實際驗證首次 Magic Link 帳號會自動建立 student profile 與 app_users 映射
-- [ ] 驗證 Vercel 建置、教師工作台讀取及 Supabase 資料存取，交付發布步驟
+- [ ] 以真實帳號驗證 Vercel Magic Link、教師工作台讀取與學生資料存取；production 靜態首頁與 tRPC 健康檢查已通過
 - [x] 以 Gemini API 的伺服器端金鑰取代受管解題模型，建立結構化數學解題與手寫題目視覺辨識相容層
 - [x] 以 Supabase Auth Magic Link 取代受管 OAuth，並由伺服器驗證 JWT 與受保護 profile 角色
 - [ ] 選定並整合 Resend、Slack 或 LINE 的教師案件即時推播服務；目前案件已安全寫入教師工作台
