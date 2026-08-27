@@ -119,6 +119,11 @@
   }
   body {
     @apply bg-background text-foreground;
+    font-family: "Noto Sans TC", ui-sans-serif, system-ui, sans-serif;
+  }
+
+  .font-serif {
+    font-family: "Noto Serif TC", ui-serif, Georgia, serif;
   }
   button:not(:disabled),
   [role="button"]:not([aria-disabled="true"]),
