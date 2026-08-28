@@ -1,6 +1,10 @@
 import type { Grade } from "../../shared/mathCurriculum";
 import { getSupabaseServerClient } from "../supabase";
 
+const TEACHER_MATERIAL_BUCKET = "teacher-materials";
+const SUPPORTED_TEACHER_MATERIAL_TYPES = ["application/pdf", "text/plain", "text/markdown"] as const;
+const MAX_TEACHER_MATERIAL_BYTES = 3 * 1024 * 1024;
+
 type TeacherUnitRow = {
   id: string;
   grade: Grade;
@@ -19,6 +23,30 @@ type ApprovedContentRow = {
   type: "concept" | "example" | "misconception" | "rubric";
   title: string;
   body: string;
+  is_approved: boolean;
+  version: number;
+};
+
+type TutorModeRow = {
+  id: string;
+  mode_key: string;
+  name: string;
+  description: string;
+  teaching_instructions: string;
+  is_approved: boolean;
+  version: number;
+};
+
+type TeacherMaterialRow = {
+  id: string;
+  unit_id: string;
+  title: string;
+  original_name: string;
+  bucket_id: string;
+  storage_path: string;
+  mime_type: string;
+  byte_size: number;
+  extracted_text: string;
   is_approved: boolean;
   version: number;
 };
@@ -50,6 +78,75 @@ function unitView(row: TeacherUnitRow) {
   };
 }
 
+function modeView(row: TutorModeRow) {
+  return {
+    id: row.id,
+    modeKey: row.mode_key,
+    name: row.name,
+    description: row.description,
+    teachingInstructions: row.teaching_instructions,
+    isApproved: row.is_approved,
+    version: row.version,
+  };
+}
+
+/** 僅提供學生選擇器所需的已核准模式名稱與說明；不公開教師完整提示指令。 */
+export async function listApprovedTutorModes() {
+  const db = getSupabaseServerClient() as any;
+  const { data, error } = await db.from("teacher_tutor_modes")
+    .select("id, mode_key, name, description, teaching_instructions, is_approved, version")
+    .eq("is_approved", true).order("mode_key", { ascending: true }).returns();
+  fail(error, "讀取學生可用解題模式");
+  return ((data ?? []) as TutorModeRow[]).map(row => ({ key: row.mode_key, name: row.name, description: row.description }));
+}
+
+/** 未核准模式不會進入模型 prompt。 */
+export async function getApprovedTutorMode(modeKey: string) {
+  const db = getSupabaseServerClient() as any;
+  const { data, error } = await db.from("teacher_tutor_modes")
+    .select("id, mode_key, name, description, teaching_instructions, is_approved, version")
+    .eq("mode_key", modeKey).eq("is_approved", true).maybeSingle();
+  fail(error, "確認學生可用解題模式");
+  return data ? modeView(data) : undefined;
+}
+
+export async function listTeacherTutorModes() {
+  const db = getSupabaseServerClient() as any;
+  const { data, error } = await db.from("teacher_tutor_modes")
+    .select("id, mode_key, name, description, teaching_instructions, is_approved, version")
+    .order("mode_key", { ascending: true }).returns();
+  fail(error, "讀取教師解題模式");
+  return (data ?? []).map(modeView);
+}
+
+export async function getTeacherTutorMode(modeKey: string) {
+  const db = getSupabaseServerClient() as any;
+  const { data, error } = await db.from("teacher_tutor_modes")
+    .select("id, mode_key, name, description, teaching_instructions, is_approved, version")
+    .eq("mode_key", modeKey).maybeSingle();
+  fail(error, "確認教師解題模式");
+  return data ? modeView(data) : undefined;
+}
+
+export async function upsertTeacherTutorMode(input: { modeKey: string; name: string; description: string; teachingInstructions: string; isApproved: boolean }) {
+  const supabase = getSupabaseServerClient() as any;
+  const current = await getTeacherTutorMode(input.modeKey);
+  if (current) {
+    const { data, error } = await supabase.from("teacher_tutor_modes").update({
+      name: input.name, description: input.description, teaching_instructions: input.teachingInstructions,
+      is_approved: input.isApproved, version: current.version + 1, updated_at: new Date().toISOString(),
+    }).eq("id", current.id).select("id").single();
+    fail(error, "更新解題模式");
+    return data.id;
+  }
+  const { data, error } = await supabase.from("teacher_tutor_modes").insert({
+    mode_key: input.modeKey, name: input.name, description: input.description,
+    teaching_instructions: input.teachingInstructions, is_approved: input.isApproved,
+  }).select("id").single();
+  fail(error, "新增解題模式");
+  return data.id;
+}
+
 export async function getTutorContext(grade: Grade, unitKey: string) {
   const supabase = getSupabaseServerClient();
   const { data: unit, error: unitError } = await supabase
@@ -62,20 +159,26 @@ export async function getTutorContext(grade: Grade, unitKey: string) {
   fail(unitError, "讀取教師單元規則");
   if (!unit) return { name: undefined, rules: "", contents: [] as Array<{ title: string; body: string; type: string }> };
 
-  const { data: contents, error: contentError } = await supabase
-    .from("approved_contents")
-    .select("id, unit_id, type, title, body, is_approved, version")
-    .eq("unit_id", unit.id)
-    .eq("is_approved", true)
-    .order("updated_at", { ascending: false })
-    .limit(8)
-    .returns<ApprovedContentRow[]>();
+  const [{ data: contents, error: contentError }, { data: materials, error: materialError }] = await Promise.all([
+    supabase.from("approved_contents")
+      .select("id, unit_id, type, title, body, is_approved, version")
+      .eq("unit_id", unit.id).eq("is_approved", true)
+      .order("updated_at", { ascending: false }).limit(8).returns<ApprovedContentRow[]>(),
+    supabase.from("teacher_materials")
+      .select("id, unit_id, title, original_name, bucket_id, storage_path, mime_type, byte_size, extracted_text, is_approved, version")
+      .eq("unit_id", unit.id).eq("is_approved", true)
+      .order("updated_at", { ascending: false }).limit(4).returns<TeacherMaterialRow[]>(),
+  ]);
   fail(contentError, "讀取核准教材");
+  fail(materialError, "讀取核准教材檔案");
 
   return {
     name: unit.name,
     rules: unit.teaching_rules,
-    contents: (contents ?? []).map(content => ({ title: content.title, body: content.body, type: content.type })),
+    contents: [
+      ...(contents ?? []).map(content => ({ title: content.title, body: content.body, type: content.type })),
+      ...(materials ?? []).filter(material => material.extracted_text.trim()).map(material => ({ title: material.title, body: material.extracted_text, type: "教材檔案" })),
+    ],
   };
 }
 
@@ -236,6 +339,44 @@ export async function addApprovedContent(input: {
     .single<{ id: string }>();
   fail(error, "新增核准教材");
   return data.id;
+}
+
+export async function uploadTeacherMaterial(input: {
+  unitId: string; title: string; filename: string; mimeType: string; bytes: Buffer; extractedText: string; isApproved: boolean;
+}) {
+  if (!SUPPORTED_TEACHER_MATERIAL_TYPES.includes(input.mimeType as (typeof SUPPORTED_TEACHER_MATERIAL_TYPES)[number])) throw new Error("教材檔案格式不受支援。");
+  if (input.bytes.length === 0 || input.bytes.length > MAX_TEACHER_MATERIAL_BYTES) throw new Error("教材檔案大小不符合 3MB 處理限制。");
+  const safeName = input.filename.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 140) || "teacher-material";
+  const storagePath = `${input.unitId}/${Date.now()}-${safeName}`;
+  const supabase = getSupabaseServerClient() as any;
+  const { error: uploadError } = await supabase.storage.from(TEACHER_MATERIAL_BUCKET).upload(storagePath, input.bytes, { contentType: input.mimeType, upsert: false });
+  fail(uploadError, "上傳私有教材檔案");
+  const { data, error } = await supabase.from("teacher_materials").insert({
+    unit_id: input.unitId, title: input.title, original_name: safeName, bucket_id: TEACHER_MATERIAL_BUCKET,
+    storage_path: storagePath, mime_type: input.mimeType, byte_size: input.bytes.length,
+    extracted_text: input.extractedText.slice(0, 12000), is_approved: input.isApproved,
+  }).select("id").single();
+  if (error) {
+    await supabase.storage.from(TEACHER_MATERIAL_BUCKET).remove([storagePath]);
+    fail(error, "保存教材檔案參照");
+  }
+  return String(data.id);
+}
+
+export async function listTeacherMaterials() {
+  const supabase = getSupabaseServerClient() as any;
+  const [{ data, error }, units] = await Promise.all([
+    supabase.from("teacher_materials").select("id, unit_id, title, original_name, bucket_id, storage_path, mime_type, byte_size, extracted_text, is_approved, version").order("created_at", { ascending: false }).limit(80),
+    listTeacherUnits(),
+  ]);
+  fail(error, "讀取教材檔案");
+  const unitsById = new Map(units.map(unit => [unit.id, unit]));
+  return ((data ?? []) as TeacherMaterialRow[]).map(material => ({
+    id: material.id, unitId: material.unit_id, title: material.title, originalName: material.original_name,
+    mimeType: material.mime_type, byteSize: material.byte_size, extractedText: material.extracted_text,
+    isApproved: material.is_approved, version: material.version, unitName: unitsById.get(material.unit_id)?.name ?? "未指定單元",
+    grade: unitsById.get(material.unit_id)?.grade ?? null,
+  }));
 }
 
 export async function listTeacherEscalations() {

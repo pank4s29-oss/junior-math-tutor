@@ -181,6 +181,41 @@ export async function listRecentAttempts(userId: string) {
   }));
 }
 
+type LearningAttemptSummaryRow = Awaited<ReturnType<typeof listRecentAttempts>>[number];
+
+function parseErrorTags(value: string): string[] {
+  try { return Array.isArray(JSON.parse(value)) ? JSON.parse(value).map((item: unknown) => String(item).trim()).filter(Boolean).slice(0, 8) : []; }
+  catch { return [] as string[]; }
+}
+
+/** 僅依本人保存的解題紀錄產生提示，不傳送學生內容到模型或其他服務。 */
+export function buildLearningInsights(attempts: LearningAttemptSummaryRow[]) {
+  const frequent = attempts.filter(item => item.studentMarkedWrong);
+  const tagCounts = new Map<string, number>();
+  frequent.forEach(item => parseErrorTags(item.errorTags).forEach(tag => tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1)));
+  const topTags = Array.from(tagCounts.entries()).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([tag, count]) => ({ tag, count }));
+  const unitCounts = new Map<string, number>();
+  frequent.forEach(item => unitCounts.set(item.unitKey, (unitCounts.get(item.unitKey) ?? 0) + 1));
+  const focusUnit = Array.from(unitCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0];
+  const recommendation = frequent.length === 0
+    ? "目前還沒有標記的常犯錯題。完成一題後，請主動標示真正容易錯的地方，系統才能整理出更貼近你的練習方向。"
+    : topTags.length
+      ? `你已標記 ${frequent.length} 題常犯錯題，最常出現的是「${topTags[0].tag}」。建議先挑 2 題重做，逐步說出每一步理由，再用代回或合理性檢查驗算。`
+      : `你已標記 ${frequent.length} 題常犯錯題。建議在每題補上一句容易錯的原因，接著選 2 題建立二次練習並記錄訂正步驟。`;
+  return {
+    recentCount: attempts.length, frequentCount: frequent.length, topTags, focusUnit: focusUnit ?? null, recommendation,
+    nextSteps: frequent.length ? ["先重做一題常犯錯題，不看先前解答。", "完成後比較每一步與原先的錯誤原因。", "用二次變式練習確認是否真正理解。"] : ["完成一題目前單元的練習。", "若有卡關或答案不確定，標記為常犯錯題。", "寫下錯誤原因，讓下一次複習更有方向。"],
+  };
+}
+
+/** 產生僅供目前學生下載的 Markdown 練習單，不包含模型回覆、照片或其他使用者資料。 */
+export function buildPracticeSheet(attempts: LearningAttemptSummaryRow[], source: "frequent" | "recent") {
+  const rows = (source === "frequent" ? attempts.filter(item => item.studentMarkedWrong) : attempts).slice(0, 20);
+  const title = source === "frequent" ? "常犯錯題練習單" : "近期學習紀錄練習單";
+  const items = rows.map((item, index) => `## ${index + 1}. ${item.unitKey}\n\n${item.questionText}\n\n我的作法：\n\n＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿\n\n驗算／檢查：\n\n＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿`).join("\n\n---\n\n");
+  return `# ${title}\n\n請先獨立作答，再逐步寫下理由與驗算。這份練習單僅包含你自己的題幹，不含解答、照片或其他同學資料。\n\n${items || "目前沒有可匯出的題目。"}\n`;
+}
+
 export async function getAttemptForUser(userId: string, attemptId: string) {
   const { data, error } = await supabase().from("math_attempts")
     .select("id").eq("id", attemptId).eq("user_id", userId).maybeSingle();

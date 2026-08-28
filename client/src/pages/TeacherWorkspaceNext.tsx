@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { trpc } from "@/lib/trpc";
 import { CORE_UNITS, GRADE_LABELS, type Grade } from "../../../shared/mathCurriculum";
-import { AlertTriangle, ArrowLeft, BadgeCheck, BookOpenCheck, Check, ClipboardCheck, FilePlus2, GraduationCap, Loader2, LogOut, Plus, Save, SlidersHorizontal } from "lucide-react";
+import { AlertTriangle, ArrowLeft, BadgeCheck, BookOpenCheck, Check, ClipboardCheck, FilePlus2, FileUp, GraduationCap, Layers3, Loader2, LogOut, Plus, Save, SlidersHorizontal } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Link } from "wouter";
@@ -19,7 +19,12 @@ const DEFAULT_RULES = "先請學生說出已知條件與要求的未知量；引
 const UNIT_KEY_PATTERN = /^[a-z][a-z0-9-]{1,79}$/;
 type ContentType = (typeof CONTENT_TYPES)[number]["value"];
 type TeacherUnit = { id: string; grade: Grade; unitKey: string; name: string; teachingRules: string; isApproved: boolean; version: number };
+type TeacherMode = { id: string; modeKey: string; name: string; description: string; teachingInstructions: string; isApproved: boolean; version: number };
+type TeacherMaterial = { id: string; title: string; originalName: string; mimeType: string; byteSize: number; extractedText: string; isApproved: boolean; version: number; unitName: string; grade: Grade | null };
 type EscalationCase = { id: string; attemptId: string; reason: "wrong_answer" | "unclear_photo" | "teacher_help" | "safety_concern"; detail: string | null; priority: string; status: "new" | "reviewing" | "resolved" };
+
+function readFileAsDataUrl(file: File) { return new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("教材檔案讀取失敗。")); reader.onerror = () => reject(new Error("教材檔案讀取失敗。")); reader.readAsDataURL(file); }); }
+function materialType(file: File) { if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) return "application/pdf" as const; if (file.type === "text/markdown" || /\.md$/i.test(file.name)) return "text/markdown" as const; return "text/plain" as const; }
 
 export default function TeacherWorkspaceNext() {
   const { user, loading, isAuthenticated, logout } = useAuth();
@@ -35,12 +40,24 @@ export default function TeacherWorkspaceNext() {
   const [contentTitle, setContentTitle] = useState("");
   const [contentBody, setContentBody] = useState("");
   const [contentApproved, setContentApproved] = useState(true);
+  const [modeKey, setModeKey] = useState("guided");
+  const [modeName, setModeName] = useState("引導解題");
+  const [modeDescription, setModeDescription] = useState("先給下一步提示，不急著揭露答案。");
+  const [modeInstructions, setModeInstructions] = useState("先給一個最小但有用的提示。除非學生明確要求完整解法，否則只揭露能讓他做下一步的內容；仍須保留固定欄位，但步驟欄最多列出下一步與其理由。");
+  const [modeApproved, setModeApproved] = useState(true);
+  const [isNewMode, setIsNewMode] = useState(false);
+  const [materialFiles, setMaterialFiles] = useState<File[]>([]);
+  const [materialApproved, setMaterialApproved] = useState(true);
 
   const units = trpc.tutor.teacher.listUnits.useQuery(undefined, { enabled: isAuthenticated && canManage });
   const contents = trpc.tutor.teacher.listContents.useQuery(undefined, { enabled: isAuthenticated && canManage });
+  const modes = trpc.tutor.teacher.listModes.useQuery(undefined, { enabled: isAuthenticated && canManage });
+  const materials = trpc.tutor.teacher.listMaterials.useQuery(undefined, { enabled: isAuthenticated && canManage });
   const escalations = trpc.tutor.teacher.listEscalations.useQuery(undefined, { enabled: isAuthenticated && canManage });
   const unitRows = (units.data ?? []) as TeacherUnit[];
   const caseRows = (escalations.data ?? []) as EscalationCase[];
+  const modeRows = (modes.data ?? []) as TeacherMode[];
+  const materialRows = (materials.data ?? []) as TeacherMaterial[];
   const coreUnits = CORE_UNITS[grade];
   const customUnits = useMemo(
     () => unitRows.filter(unit => unit.grade === grade && !CORE_UNITS[grade].some(core => core.key === unit.unitKey)),
@@ -69,6 +86,14 @@ export default function TeacherWorkspaceNext() {
     onSuccess: () => { toast.success("教材內容已加入指定單元。", { icon: <Check className="size-4" /> }); setContentTitle(""); setContentBody(""); void units.refetch(); void contents.refetch(); },
     onError: error => toast.error(error.message),
   });
+  const upsertMode = trpc.tutor.teacher.upsertMode.useMutation({
+    onSuccess: (_, variables) => { toast.success(variables.createOnly ? "已建立解題模式草稿；核准後學生即可選擇。" : "解題模式已儲存並建立版本。"); setIsNewMode(false); void modes.refetch(); },
+    onError: error => toast.error(error.message || "解題模式儲存失敗，請稍後再試。"),
+  });
+  const uploadMaterial = trpc.tutor.teacher.uploadMaterial.useMutation({
+    onSuccess: () => { void materials.refetch(); void contents.refetch(); },
+    onError: error => toast.error(error.message || "教材檔案匯入失敗。"),
+  });
   const updateCase = trpc.tutor.teacher.updateEscalationStatus.useMutation({
     onSuccess: () => { toast.success("案件狀態已更新。"); void escalations.refetch(); },
     onError: error => toast.error(error.message),
@@ -95,6 +120,29 @@ export default function TeacherWorkspaceNext() {
     if (!UNIT_KEY_PATTERN.test(normalizedKey)) return toast.error("單元代碼須以小寫英文字母開頭，且只能使用小寫英文、數字與連字號。");
     if (!name.trim()) return toast.error("請填寫學生會看到的單元名稱。");
     upsertUnit.mutate({ grade, unitKey: normalizedKey, name: name.trim(), teachingRules: rules.trim(), isApproved, createOnly: isNewCustomUnit });
+  };
+  const loadMode = (item: TeacherMode) => { setModeKey(item.modeKey); setModeName(item.name); setModeDescription(item.description); setModeInstructions(item.teachingInstructions); setModeApproved(item.isApproved); setIsNewMode(false); };
+  const startNewMode = () => { setModeKey(""); setModeName(""); setModeDescription(""); setModeInstructions("請以繁體中文引導學生，優先確認題意、說明關鍵觀念、呈現可追蹤的推理，最後進行驗算。不得跳過固定結構化回覆與安全規則。"); setModeApproved(false); setIsNewMode(true); };
+  const saveMode = () => {
+    const key = modeKey.trim();
+    if (!UNIT_KEY_PATTERN.test(key)) return toast.error("模式代碼須以小寫英文字母開頭，且只能使用小寫英文、數字與連字號。");
+    if (!modeName.trim() || !modeDescription.trim()) return toast.error("請填寫學生會看到的模式名稱與說明。");
+    upsertMode.mutate({ modeKey: key, name: modeName.trim(), description: modeDescription.trim(), teachingInstructions: modeInstructions.trim(), isApproved: modeApproved, createOnly: isNewMode });
+  };
+  const importMaterials = async () => {
+    if (!selectedContentUnit) return toast.error("請先選擇教材歸屬單元。");
+    if (!materialFiles.length) return toast.error("請至少選擇一個教材檔案。");
+    try {
+      for (const file of materialFiles) {
+        if (!/\.(pdf|txt|md)$/i.test(file.name) && !["application/pdf", "text/plain", "text/markdown"].includes(file.type)) throw new Error(`${file.name} 不是可匯入的 PDF、TXT 或 Markdown 教材。`);
+        if (file.size === 0 || file.size > 3 * 1024 * 1024) throw new Error(`${file.name} 超過 3MB 或是空檔案。`);
+        await uploadMaterial.mutateAsync({ grade: selectedContentUnit.grade, unitKey: selectedContentUnit.unitKey, unitName: selectedContentUnit.name, title: file.name.replace(/\.[^.]+$/, "").slice(0, 200) || "匯入教材", filename: file.name, mimeType: materialType(file), dataUrl: await readFileAsDataUrl(file), isApproved: materialApproved });
+      }
+      toast.success(`已匯入 ${materialFiles.length} 份教材；僅核准檔案的教學文字會用於學生解題。`);
+      setMaterialFiles([]);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "教材檔案匯入失敗。");
+    }
   };
   const handleLogout = async () => {
     try { await logout(); toast.success("已安全登出此裝置。"); }
@@ -128,6 +176,15 @@ export default function TeacherWorkspaceNext() {
               <CheckLabel checked={isApproved} onChange={setIsApproved} label="核准此單元，讓學生在課程選擇與解題時使用" />
               <Button type="button" onClick={saveUnit} disabled={upsertUnit.isPending || rules.trim().length < 30 || !name.trim() || (isNewCustomUnit && !UNIT_KEY_PATTERN.test(unitKey.trim()))} className="w-full rounded-xl bg-[#173b4d] hover:bg-[#0f2e3d]"><Save className="mr-2 size-4" />{upsertUnit.isPending ? "正在儲存…" : isNewCustomUnit ? "建立自訂單元" : "儲存規則版本"}</Button>
             </div>
+          </section>
+          <section className="rounded-[1.5rem] border border-slate-200 bg-white p-5 shadow-sm">
+            <SectionTitle icon={<Layers3 />} eyebrow="解題流程" title={isNewMode ? "新增解題模式" : "學生可選解題模式"} detail="可調整既有流程，或新增草稿流程；只有已核准模式會顯示在學生端，固定安全規則與結構化回覆仍會保留。" />
+            <div className="mt-5 flex gap-2 overflow-x-auto pb-1">{modeRows.map(item => <button type="button" key={item.id} onClick={() => loadMode(item)} className={`shrink-0 rounded-xl border px-3 py-2 text-xs font-medium ${!isNewMode && modeKey === item.modeKey ? "border-[#9acfc6] bg-[#eaf6f3] text-[#125d55]" : "border-slate-200 text-slate-500"}`}>{item.name}</button>)}<button type="button" onClick={startNewMode} className="inline-flex shrink-0 items-center gap-1 rounded-xl border border-dashed border-[#83c0b6] bg-[#f7fcfa] px-3 py-2 text-xs font-semibold text-[#196b63]"><Plus className="size-3.5" />新增模式</button></div>
+            <div className="mt-5 grid gap-4">{isNewMode && <label className="grid gap-1.5 text-sm font-medium text-slate-700">模式代碼<Input value={modeKey} onChange={event => setModeKey(event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))} placeholder="例如 exam-review" maxLength={80} autoCapitalize="none" spellCheck={false} /><span className="text-xs font-normal text-slate-500">建立後不可更名；請用小寫英文、數字與連字號。</span></label>}<label className="grid gap-1.5 text-sm font-medium text-slate-700">學生顯示名稱<Input value={modeName} onChange={event => setModeName(event.target.value)} placeholder="例如 考前重點複習" maxLength={80} /></label><label className="grid gap-1.5 text-sm font-medium text-slate-700">學生端說明<Textarea value={modeDescription} onChange={event => setModeDescription(event.target.value)} rows={2} maxLength={240} /></label><label className="grid gap-1.5 text-sm font-medium text-slate-700">教學流程指令<Textarea value={modeInstructions} onChange={event => setModeInstructions(event.target.value)} className="min-h-32 leading-6" maxLength={3000} /><span className="text-xs font-normal text-slate-500">用來描述提示、步驟與訂正節奏；系統仍會強制保留可靠性、隱私與固定回覆欄位。</span></label><CheckLabel checked={modeApproved} onChange={setModeApproved} label="核准此模式，讓學生選擇" /><Button type="button" onClick={saveMode} disabled={upsertMode.isPending || !modeName.trim() || !modeDescription.trim() || modeInstructions.trim().length < 30 || (isNewMode && !UNIT_KEY_PATTERN.test(modeKey.trim()))} className="w-full rounded-xl bg-[#173b4d] hover:bg-[#0f2e3d]"><Save className="mr-2 size-4" />{upsertMode.isPending ? "正在儲存…" : isNewMode ? "建立解題模式" : "儲存模式版本"}</Button></div>
+          </section>
+          <section className="rounded-[1.5rem] border border-slate-200 bg-white p-5 shadow-sm">
+            <SectionTitle icon={<FileUp />} eyebrow="教材檔案" title="依單元批次匯入教材" detail="支援 PDF、TXT、Markdown；每檔上限 3MB。檔案保存在私有教材庫，PDF 會由伺服器擷取教學文字，僅核准文字會進入學生解題參考。" />
+            <div className="mt-5 grid gap-4"><label className="grid gap-1.5 text-sm font-medium text-slate-700">歸屬單元<select value={contentUnitValue} onChange={event => setContentUnitValue(event.target.value)} className="h-11 w-full rounded-xl border border-input bg-background px-3 text-sm shadow-sm">{(["seven", "eight", "nine"] as Grade[]).map(optionGrade => <optgroup key={optionGrade} label={GRADE_LABELS[optionGrade]}>{contentUnitOptions.filter(item => item.grade === optionGrade).map(item => <option key={`${item.grade}:${item.unitKey}`} value={`${item.grade}:${item.unitKey}`}>{item.name}</option>)}</optgroup>)}</select></label><label className="grid gap-2 text-sm font-medium text-slate-700"><span>教材檔案</span><Input type="file" multiple accept="application/pdf,text/plain,text/markdown,.pdf,.txt,.md" onChange={event => setMaterialFiles(Array.from(event.target.files ?? []))} /><span className="text-xs font-normal text-slate-500">可一次選取多份同一單元的教材。請不要匯入含學生個資、帳密或 API 金鑰的文件。</span></label>{materialFiles.length > 0 && <div className="max-h-28 space-y-1 overflow-y-auto rounded-xl bg-[#f7f8f5] p-3 text-xs text-slate-600">{materialFiles.map(file => <p key={`${file.name}-${file.lastModified}`} className="truncate">{file.name}・{Math.ceil(file.size / 1024)} KB</p>)}</div>}<CheckLabel checked={materialApproved} onChange={setMaterialApproved} label="核准這批教材供對應單元的學生解題時參考" /><Button type="button" onClick={importMaterials} disabled={uploadMaterial.isPending || !selectedContentUnit || !materialFiles.length} className="w-full rounded-xl bg-[#196b63] hover:bg-[#115950]"><FileUp className="mr-2 size-4" />{uploadMaterial.isPending ? "正在匯入教材…" : `匯入 ${materialFiles.length || "多份"} 教材`}</Button>{materialRows.length > 0 && <p className="text-xs leading-5 text-slate-500">教材庫目前有 {materialRows.length} 份檔案；最新一份為「{materialRows[0].title}」。</p>}</div>
           </section>
           <section className="rounded-[1.5rem] border border-slate-200 bg-white p-5 shadow-sm"><SectionTitle icon={<FilePlus2 />} eyebrow="教材內容" title="新增核准教材" detail="先選年級與指定單元，再加入觀念、示範題、迷思或規準；學生解題只會使用已核准內容。" /><div className="mt-5 grid gap-4"><label className="grid gap-1.5 text-sm font-medium text-slate-700">歸屬單元<select value={contentUnitValue} onChange={event => setContentUnitValue(event.target.value)} className="h-11 w-full rounded-xl border border-input bg-background px-3 text-sm shadow-sm">{(["seven", "eight", "nine"] as Grade[]).map(optionGrade => <optgroup key={optionGrade} label={GRADE_LABELS[optionGrade]}>{contentUnitOptions.filter(item => item.grade === optionGrade).map(item => <option key={`${item.grade}:${item.unitKey}`} value={`${item.grade}:${item.unitKey}`}>{item.name}{item.hasRules ? "" : "（首次加入會建立單元規則）"}</option>)}</optgroup>)}</select><span className="text-xs font-normal leading-5 text-slate-500">目前指定：{selectedContentUnit ? `${GRADE_LABELS[selectedContentUnit.grade]}・${selectedContentUnit.name}` : "請選擇單元"}。切換上方單元時會自動帶入此處。</span></label><label className="grid gap-1.5 text-sm font-medium text-slate-700">內容類型<select value={contentType} onChange={event => setContentType(event.target.value as ContentType)} className="h-10 rounded-md border border-input bg-background px-3 text-sm shadow-sm">{CONTENT_TYPES.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label className="grid gap-1.5 text-sm font-medium text-slate-700">標題<Input value={contentTitle} onChange={event => setContentTitle(event.target.value)} maxLength={200} /></label><label className="grid gap-1.5 text-sm font-medium text-slate-700">內容<Textarea value={contentBody} onChange={event => setContentBody(event.target.value)} className="min-h-36 leading-6" maxLength={12000} /></label><CheckLabel checked={contentApproved} onChange={setContentApproved} label="核准此內容供學生解題時參考" /><Button type="button" onClick={() => { if (!selectedContentUnit) return toast.error("請先選擇教材歸屬單元。"); addContent.mutate({ grade: selectedContentUnit.grade, unitKey: selectedContentUnit.unitKey, unitName: selectedContentUnit.name, type: contentType, title: contentTitle, body: contentBody, isApproved: contentApproved }); }} disabled={addContent.isPending || !selectedContentUnit || !contentTitle.trim() || contentBody.trim().length < 20} className="w-full rounded-xl bg-[#196b63] hover:bg-[#115950]"><BookOpenCheck className="mr-2 size-4" />{addContent.isPending ? "正在加入…" : "加入指定單元教材"}</Button></div></section>
         </div>

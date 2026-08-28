@@ -1,8 +1,12 @@
 export const GRADES = ["seven", "eight", "nine"] as const;
 export type Grade = (typeof GRADES)[number];
 
-export const MODES = ["guided", "step_by_step", "check"] as const;
-export type TutorMode = (typeof MODES)[number];
+export const DEFAULT_TUTOR_MODES = [
+  { key: "guided", name: "引導解題", description: "先給下一步提示，不急著揭露答案。" },
+  { key: "step-by-step", name: "逐步教學", description: "把推理、算式與理由完整說清楚。" },
+  { key: "check", name: "驗算訂正", description: "檢查你的過程，找出第一個可修正處。" },
+] as const;
+export type TutorMode = string;
 
 export const CORE_UNITS: Record<Grade, Array<{ key: string; label: string }>> = {
   seven: [
@@ -31,8 +35,4 @@ export const GRADE_LABELS: Record<Grade, string> = {
   nine: "九年級",
 };
 
-export const MODE_LABELS: Record<TutorMode, string> = {
-  guided: "引導解題",
-  step_by_step: "逐步教學",
-  check: "驗算訂正",
-};
+export const MODE_LABELS: Record<string, string> = Object.fromEntries(DEFAULT_TUTOR_MODES.map(mode => [mode.key, mode.name]));
