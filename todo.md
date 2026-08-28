@@ -35,7 +35,7 @@
 - [x] 新增跨學生資料隔離自動化測試，驗證學生 A 不能讀取、辨識或引用學生 B 的附件、解題紀錄、練習與案件
 - [x] 在登入成功流程建立 Supabase Auth 對應，於 session 建立時寫入 app_users.supabase_auth_user_id
 - [x] 補上學生 A 引用學生 B conversationId 與 attemptId 時的完整隔離測試
-- [ ] 完成通知服務的外部供應商選定與整合；登入、AI 與檔案已改為 Supabase／Gemini 可攜式架構
+- [ ] 完成通知服務的外部供應商選定與整合；使用者已於 2026-08-28 決定暫緩，登入、AI 與檔案維持 Supabase／Gemini 可攜式架構
 - [x] 建立 Supabase 作為後台資料與私有檔案的正式單一來源，保留教師工作台權限與學生資料隔離
 - [x] 將完整程式碼與部署設定同步至已連結的 GitHub repository
 - [x] 新增 Vercel Serverless 相容層、環境變數設定文件與部署設定
@@ -43,7 +43,8 @@
 - [ ] 以真實帳號驗證 Vercel Magic Link、教師工作台讀取與學生資料存取；production 靜態首頁與 tRPC 健康檢查已通過
 - [x] 以 Gemini API 的伺服器端金鑰取代受管解題模型，建立結構化數學解題與手寫題目視覺辨識相容層
 - [x] 以 Supabase Auth Magic Link 取代受管 OAuth，並由伺服器驗證 JWT 與受保護 profile 角色
-- [ ] 選定並整合 Resend、Slack 或 LINE 的教師案件即時推播服務；目前案件已安全寫入教師工作台
+- [ ] 選定並整合 Resend、Slack 或 LINE 的教師案件即時推播服務；使用者目前決定暫緩，案件持續安全寫入教師工作台
+- [ ] 收到未來通知供應商選擇後，再進行教師案件即時推播的最小權限整合與健康測試
 - [x] 建立並驗證可在使用者本機獨立維護的交接流程：GitHub clone、環境變數、Supabase migration 與 Vercel Git 發布
 - [x] 在乾淨目錄完成 GitHub clone、依賴安裝、環境範本複製與本機 API proxy 驗證
 - [x] 提供可自動驗證 Vite proxy 至 Express tRPC 健康回應的本機檢查腳本
