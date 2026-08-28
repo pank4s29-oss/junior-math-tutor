@@ -192,7 +192,7 @@ export default function Home() {
       if (!attachmentId) return;
       const result = await recognizePhoto.mutateAsync({ attachmentId });
       setRecognitionDraft(result.transcription);
-      setRemaining(result.remaining);
+      if (result.remaining !== null) setRemaining(result.remaining);
       setAttachments(current => current.map(item => item.localId === attachment.localId ? {
         ...item,
         attachmentId,
@@ -232,7 +232,13 @@ export default function Home() {
     } catch (error) {
       const message = error instanceof Error ? error.message : "解題服務暫時無法使用，請稍後再試。";
       toast.error(message);
-      setMessages(current => [...current, { role: "assistant", content: "## 暫時無法可靠作答\n我現在無法完成這題的安全檢查。請稍候再試，或改為補上清楚題目與你的作答步驟。\n\n> AI 可能出錯；重要答案請與教師或可驗算步驟交叉確認。" }]);
+      const isCooldown = message.includes("請稍候幾秒再送出");
+      const isQuotaLimit = message.includes("今天的解題額度已用完");
+      setMessages(current => [...current, { role: "assistant", content: isCooldown
+        ? `## 請稍候再送出\n${message}\n\n> 題目檔案仍保留在佇列中，不必重新上傳。`
+        : isQuotaLimit
+          ? `## 今日額度已達上限\n${message}\n\n> 你可先到「常犯錯題」回顧與匯出練習單，明天再繼續解題。`
+          : "## 暫時無法可靠作答\n我現在無法完成這題的安全檢查。請稍候再試，或改為補上清楚題目與你的作答步驟。\n\n> AI 可能出錯；重要答案請與教師或可驗算步驟交叉確認。" }]);
     }
   };
 

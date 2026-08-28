@@ -45,6 +45,8 @@
 - [x] 以 Supabase Auth Magic Link 取代受管 OAuth，並由伺服器驗證 JWT 與受保護 profile 角色
 - [ ] 選定並整合 Resend、Slack 或 LINE 的教師案件即時推播服務；使用者目前決定暫緩，案件持續安全寫入教師工作台
 - [ ] 收到未來通知供應商選擇後，再進行教師案件即時推播的最小權限整合與健康測試
+- [x] 診斷並修復多題上傳時第二張題目觸發「暫時無法可靠作答」的安全檢查失敗
+- [x] 補齊第二張以上題目附件的上傳、辨識與解題回歸測試，並同步修復版本
 - [x] 建立並驗證可在使用者本機獨立維護的交接流程：GitHub clone、環境變數、Supabase migration 與 Vercel Git 發布
 - [x] 在乾淨目錄完成 GitHub clone、依賴安裝、環境範本複製與本機 API proxy 驗證
 - [x] 提供可自動驗證 Vite proxy 至 Express tRPC 健康回應的本機檢查腳本
