@@ -14,7 +14,12 @@ export function configureApiApp(app: Express) {
 
   const staticDir = path.resolve(process.cwd(), "public");
   app.use(express.static(staticDir, { index: false, maxAge: "1h" }));
-  app.get(/^(?!\/api\/).*/, (_req, res) => {
+  app.get(/^(?!\/api\/).*/, (req, res) => {
+    // SPA fallback 只服務 HTML 導覽；資產路徑若不存在必須維持 404，避免瀏覽器把 index.html 當成 JS/CSS 載入而白屏。
+    if (req.path.includes(".") || !req.accepts("html")) {
+      res.status(404).type("text").send("Not found");
+      return;
+    }
     res.sendFile(path.join(staticDir, "index.html"));
   });
 

@@ -31,5 +31,9 @@ describe("Vercel 相容 tRPC API 應用程式", () => {
     expect(home.status).toBe(200);
     expect(await home.text()).toContain("國中數學解題教練");
     expect(missingApi.status).toBe(404);
+    const missingAsset = await fetch(`http://127.0.0.1:${address.port}/assets/missing-bundle.js`);
+    expect(missingAsset.status).toBe(404);
+    expect(missingAsset.headers.get("content-type")).toContain("text/plain");
+    expect(await missingAsset.text()).not.toContain("國中數學解題教練");
   });
 });
