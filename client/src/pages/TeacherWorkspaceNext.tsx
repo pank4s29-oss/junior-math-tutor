@@ -48,11 +48,13 @@ export default function TeacherWorkspaceNext() {
   const [isNewMode, setIsNewMode] = useState(false);
   const [materialFiles, setMaterialFiles] = useState<File[]>([]);
   const [materialApproved, setMaterialApproved] = useState(true);
+  const [batchLimit, setBatchLimit] = useState<5 | 10>(5);
 
   const units = trpc.tutor.teacher.listUnits.useQuery(undefined, { enabled: isAuthenticated && canManage });
   const contents = trpc.tutor.teacher.listContents.useQuery(undefined, { enabled: isAuthenticated && canManage });
   const modes = trpc.tutor.teacher.listModes.useQuery(undefined, { enabled: isAuthenticated && canManage });
   const materials = trpc.tutor.teacher.listMaterials.useQuery(undefined, { enabled: isAuthenticated && canManage });
+  const batchSettings = trpc.tutor.batchSettings.useQuery(undefined, { enabled: isAuthenticated && canManage, retry: false });
   const escalations = trpc.tutor.teacher.listEscalations.useQuery(undefined, { enabled: isAuthenticated && canManage });
   const unitRows = (units.data ?? []) as TeacherUnit[];
   const caseRows = (escalations.data ?? []) as EscalationCase[];
@@ -72,6 +74,7 @@ export default function TeacherWorkspaceNext() {
   const selectedContentUnit = contentUnitOptions.find(item => `${item.grade}:${item.unitKey}` === contentUnitValue) ?? contentUnitOptions[0];
 
   useEffect(() => { setContentUnitValue(`${grade}:${unitKey}`); }, [grade, unitKey]);
+  useEffect(() => { if (batchSettings.data?.maxBatchQuestions === 10) setBatchLimit(10); }, [batchSettings.data?.maxBatchQuestions]);
 
   const upsertUnit = trpc.tutor.teacher.upsertUnit.useMutation({
     onSuccess: (_, variables) => {
@@ -89,6 +92,10 @@ export default function TeacherWorkspaceNext() {
   const upsertMode = trpc.tutor.teacher.upsertMode.useMutation({
     onSuccess: (_, variables) => { toast.success(variables.createOnly ? "已建立解題模式草稿；核准後學生即可選擇。" : "解題模式已儲存並建立版本。"); setIsNewMode(false); void modes.refetch(); },
     onError: error => toast.error(error.message || "解題模式儲存失敗，請稍後再試。"),
+  });
+  const updateBatchLimit = trpc.tutor.teacher.updateBatchLimit.useMutation({
+    onSuccess: value => { setBatchLimit(value as 5 | 10); toast.success(`學生每批最多 ${value} 題，已更新。`); void batchSettings.refetch(); },
+    onError: error => toast.error(error.message || "批次上限更新失敗。"),
   });
   const uploadMaterial = trpc.tutor.teacher.uploadMaterial.useMutation({
     onSuccess: () => { void materials.refetch(); void contents.refetch(); },
@@ -164,6 +171,10 @@ export default function TeacherWorkspaceNext() {
       <section className="rounded-[1.8rem] bg-[#173b4d] px-5 py-7 text-white shadow-[0_22px_50px_-34px_rgba(23,59,77,0.7)] sm:px-7"><p className="text-xs font-semibold tracking-[0.16em] text-[#f8cf88]">TEACHING CONTROL LAYER</p><h1 className="mt-2 font-serif text-3xl font-semibold tracking-tight">把你的教學方法放進每一題。</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-slate-200">可建立自訂單元、教材與規則；學生端只會看見並使用已核准的內容。</p></section>
       <div className="mt-6 grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
         <div className="space-y-6">
+          <section className="rounded-[1.5rem] border border-slate-200 bg-white p-5 shadow-sm">
+            <SectionTitle icon={<SlidersHorizontal />} eyebrow="解題工作階段" title="每批多題上限" detail="設定學生一次上傳可建立的題目數；設定只影響新工作階段，不會中斷正在處理的題目。" />
+            <div className="mt-5 flex gap-2 overflow-x-auto pb-1">{([5, 10] as const).map(value => <button type="button" key={value} onClick={() => setBatchLimit(value)} className={`shrink-0 rounded-xl border px-4 py-3 text-sm font-semibold ${batchLimit === value ? "border-[#196b63] bg-[#eaf6f3] text-[#125d55]" : "border-slate-200 text-slate-500"}`}>每批 {value} 題</button>)}<Button type="button" onClick={() => updateBatchLimit.mutate({ maxBatchQuestions: batchLimit })} disabled={updateBatchLimit.isPending} className="ml-auto shrink-0 rounded-xl bg-[#173b4d] hover:bg-[#0f2e3d]">{updateBatchLimit.isPending ? "儲存中…" : "儲存上限"}</Button></div>
+          </section>
           <section className="rounded-[1.5rem] border border-slate-200 bg-white p-5 shadow-sm">
             <SectionTitle icon={<SlidersHorizontal />} eyebrow="提示規則" title={isNewCustomUnit ? "新增自訂解題單元" : "單元教學規則"} detail={isNewCustomUnit ? "草稿不會顯示給學生；勾選核准後才會出現在學生端課程選擇。" : "每次儲存都會建立新版本；只有已核准規則會進入學生解題流程。"} />
             <div className="mt-5 flex gap-2 overflow-x-auto pb-1">{(["seven", "eight", "nine"] as Grade[]).map(item => <button type="button" key={item} onClick={() => loadUnit(item, CORE_UNITS[item][0].key, CORE_UNITS[item][0].label)} className={`shrink-0 rounded-full px-4 py-2 text-sm font-medium ${grade === item ? "bg-[#196b63] text-white" : "bg-[#f2f5f4] text-slate-600"}`}>{GRADE_LABELS[item]}</button>)}</div>

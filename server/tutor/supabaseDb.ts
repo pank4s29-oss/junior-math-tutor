@@ -63,6 +63,12 @@ export async function consumeSolveQuota(userId: string) {
   return decision;
 }
 
+/** 僅在已通過本次額度檢查、但尚未成功取得模型回覆時退還一次計次。 */
+export async function refundSolveQuota(userId: string) {
+  const { error } = await supabase().rpc("refund_tutor_quota", { p_user_id: userId });
+  fail(error, "退還暫時失敗的解題額度");
+}
+
 export async function uploadMathPhoto(input: { userId: string; filename: string; mimeType: string; bytes: Buffer }) {
   if (!SUPPORTED_ATTACHMENT_TYPES.includes(input.mimeType as (typeof SUPPORTED_ATTACHMENT_TYPES)[number])) throw new Error("題目檔案格式不受支援。");
   const maxBytes = input.mimeType === "application/pdf" ? MAX_PDF_BYTES : MAX_IMAGE_BYTES;
@@ -302,4 +308,35 @@ export async function listEscalations() {
 export async function updateEscalationStatus(input: { id: string; status: "new" | "reviewing" | "resolved" }) {
   const { error } = await supabase().from("teacher_escalations").update({ status: input.status }).eq("id", input.id);
   fail(error, "更新學生回報案件");
+}
+
+export function validateBatchQuestionCount(questionCount: number, maxQuestions: number) {
+  return Number.isInteger(questionCount) && questionCount >= 1 && (maxQuestions === 5 || maxQuestions === 10) && questionCount <= maxQuestions;
+}
+
+export async function createBatchSession(input: { userId: string; grade: Grade; unitKey: string; questionCount: number; maxQuestions: number }) {
+  if (!validateBatchQuestionCount(input.questionCount, input.maxQuestions)) {
+    throw new Error("這批題目超過目前允許的處理上限。");
+  }
+  const { data, error } = await supabase().from("tutor_batch_sessions").insert({
+    user_id: input.userId, grade: input.grade, unit_key: input.unitKey,
+    question_count: input.questionCount, max_questions: input.maxQuestions, status: "active",
+  }).select("id, question_count, max_questions, status").single();
+  fail(error, "建立多題解題工作階段");
+  return { id: String(data.id), questionCount: Number(data.question_count), maxQuestions: Number(data.max_questions), status: String(data.status) };
+}
+
+export async function getBatchSessionForUser(userId: string, sessionId: string) {
+  const { data, error } = await supabase().from("tutor_batch_sessions")
+    .select("id, user_id, grade, unit_key, question_count, max_questions, status")
+    .eq("id", sessionId).eq("user_id", userId).maybeSingle();
+  fail(error, "驗證多題工作階段擁有權");
+  if (!data) return undefined;
+  return { id: String(data.id), grade: data.grade as Grade, unitKey: String(data.unit_key), questionCount: Number(data.question_count), maxQuestions: Number(data.max_questions), status: String(data.status) };
+}
+
+export async function completeBatchSession(userId: string, sessionId: string) {
+  const { error } = await supabase().from("tutor_batch_sessions")
+    .update({ status: "completed" }).eq("id", sessionId).eq("user_id", userId);
+  fail(error, "完成多題解題工作階段");
 }

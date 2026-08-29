@@ -407,3 +407,23 @@ export async function updateTeacherEscalationStatus(input: { id: string; status:
     .eq("id", input.id);
   fail(error, "更新 Supabase 學生回報案件");
 }
+
+export async function getBatchQuestionLimit() {
+  const { data, error } = await getSupabaseServerClient()
+    .from("teacher_tutor_settings")
+    .select("max_batch_questions")
+    .eq("id", true)
+    .single<{ max_batch_questions: number }>();
+  fail(error, "讀取多題解題上限");
+  return data.max_batch_questions === 10 ? 10 : 5;
+}
+
+export async function updateBatchQuestionLimit(maxBatchQuestions: 5 | 10) {
+  const { data, error } = await getSupabaseServerClient()
+    .from("teacher_tutor_settings")
+    .upsert({ id: true, max_batch_questions: maxBatchQuestions, updated_at: new Date().toISOString() } as any)
+    .select("max_batch_questions")
+    .single<{ max_batch_questions: number }>();
+  fail(error, "更新多題解題上限");
+  return data.max_batch_questions === 10 ? 10 : 5;
+}

@@ -10,7 +10,7 @@ import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Link } from "wouter";
 
-type PendingAttachment = { localId: string; file: File; kind: "image" | "pdf" | "text"; preview?: string; normalizedDataUrl?: string; quality: PhotoQuality; attachmentId?: string; transcription?: string };
+type PendingAttachment = { localId: string; file: File; kind: "image" | "pdf" | "text"; preview?: string; normalizedDataUrl?: string; quality: PhotoQuality; attachmentId?: string; transcription?: string; conversationId?: string };
 type LastAttempt = { id: string; variationQuestion: string; confidence: number; needsClarification: boolean };
 type LearningAttempt = { id: string; questionText: string; confidence: number; errorTags: string; needsClarification: boolean };
 type StudentMode = { key: string; name: string; description: string };
@@ -96,9 +96,11 @@ export default function Home() {
   const [practiceAnswer, setPracticeAnswer] = useState("");
   const [remaining, setRemaining] = useState<number | null>(null);
   const [authDialogOpen, setAuthDialogOpen] = useState(false);
+  const [batchSessionId, setBatchSessionId] = useState<string | null>(null);
 
   const curriculum = trpc.tutor.curriculum.useQuery(undefined, { enabled: isAuthenticated, retry: false });
   const solutionModes = trpc.tutor.solutionModes.useQuery(undefined, { enabled: isAuthenticated, retry: false });
+  const batchSettings = trpc.tutor.batchSettings.useQuery(undefined, { enabled: isAuthenticated, retry: false });
   const unitsByGrade = curriculum.data?.units ?? CORE_UNITS;
   const units = useMemo(() => unitsByGrade[grade] ?? CORE_UNITS[grade], [grade, unitsByGrade]);
   const unit = units.find(item => item.key === unitKey) ?? units[0];
@@ -110,6 +112,8 @@ export default function Home() {
   const uploadPhoto = trpc.tutor.uploadPhoto.useMutation();
   const recognizePhoto = trpc.tutor.recognizePhoto.useMutation();
   const solve = trpc.tutor.solve.useMutation();
+  const startBatchSession = trpc.tutor.startBatchSession.useMutation();
+  const maxBatchQuestions = batchSettings.data?.maxBatchQuestions ?? 5;
   const reportConcern = trpc.tutor.reportConcern.useMutation();
   const savePractice = trpc.tutor.savePractice.useMutation();
   const markMistake = trpc.tutor.markMistake.useMutation({
@@ -138,9 +142,11 @@ export default function Home() {
 
   const selectAttachments = async (files: File[]) => {
     try {
-      const limited = files.slice(0, 5);
-      if (!limited.length) return;
-      if (files.length > 5) toast.message("一次最多處理 5 個題目檔案，其餘檔案請分批匯入。");
+      const available = batchSessionId ? 0 : Math.max(0, maxBatchQuestions - attachments.length);
+      const limited = files.slice(0, available);
+      if (!limited.length) { toast.message(`目前這批最多 ${maxBatchQuestions} 題；請先完成或清除待處理題目。`); return; }
+      if (batchSessionId) { toast.message("目前這批已開始處理；請先完成或清除目前題目，再建立下一批。"); return; }
+      if (files.length > available) toast.message(`目前這批最多 ${maxBatchQuestions} 題，其餘檔案請分批匯入。`);
       const prepared = await Promise.all(limited.map(async file => {
         const localId = crypto.randomUUID();
         if (["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
@@ -160,6 +166,7 @@ export default function Home() {
         throw new Error(`${file.name} 不是支援的 JPEG、PNG、WebP、PDF、TXT 或 Markdown 題目檔。`);
       }));
       setAttachments(current => [...current, ...prepared]);
+      if (!attachments.length) setBatchSessionId(null);
       setRecognitionDraft(prepared[0]?.transcription ?? "");
       toast.success(`已加入 ${prepared.length} 個題目檔案，系統會依序建立解題紀錄。`, { icon: <BadgeCheck className="size-4" /> });
     } catch (error) {
@@ -219,14 +226,26 @@ export default function Home() {
     try {
       let attachmentId: string | undefined;
       if (activeAttachment) attachmentId = await ensureAttachmentUploaded();
-      const result = await solve.mutateAsync({ question, grade, unitKey: unit.key, mode, attachmentId });
+      let activeSessionId = batchSessionId;
+      if (activeAttachment && !activeSessionId) {
+        const session = await startBatchSession.mutateAsync({ grade, unitKey: unit.key, questionCount: attachments.length });
+        activeSessionId = session.id;
+        setBatchSessionId(session.id);
+      }
+      const result = await solve.mutateAsync({ question, grade, unitKey: unit.key, mode, attachmentId, sessionId: activeSessionId ?? undefined, conversationId: activeAttachment?.conversationId });
       setMessages(current => [...current, { role: "assistant", content: result.responseMarkdown }]);
       setLastAttempt({ id: result.attemptId, variationQuestion: result.solution.variationQuestion, confidence: result.solution.confidence, needsClarification: result.solution.needsClarification });
       setRemaining(result.remaining);
       const nextAttachment = attachments[1];
-      setAttachments(current => current.slice(1));
-      setRecognitionDraft("");
-      setRecognitionDraft(nextAttachment?.transcription ?? "");
+      if (nextAttachment) {
+        setAttachments(current => current.slice(1));
+        setRecognitionDraft(nextAttachment.transcription ?? "");
+      } else if (activeAttachment) {
+        setAttachments(current => current.map(item => item.localId === activeAttachment.localId ? { ...item, conversationId: result.conversationId } : item));
+        setRecognitionDraft(activeAttachment.transcription ?? "");
+      } else {
+        setRecognitionDraft("");
+      }
       history.refetch();
       if (result.solution.needsClarification) toast.message("我需要更多題目資訊，請依回覆補拍或補充文字。", { icon: <CircleHelp className="size-4" /> });
     } catch (error) {
@@ -234,10 +253,13 @@ export default function Home() {
       toast.error(message);
       const isCooldown = message.includes("請稍候幾秒再送出");
       const isQuotaLimit = message.includes("今天的解題額度已用完");
+      const isProviderBusy = message.includes("解題服務暫時繁忙");
       setMessages(current => [...current, { role: "assistant", content: isCooldown
         ? `## 請稍候再送出\n${message}\n\n> 題目檔案仍保留在佇列中，不必重新上傳。`
         : isQuotaLimit
           ? `## 今日額度已達上限\n${message}\n\n> 你可先到「常犯錯題」回顧與匯出練習單，明天再繼續解題。`
+          : isProviderBusy
+            ? `## 解題服務暫時繁忙\n${message}\n\n> 這不是題目清晰度問題。請依提示稍候後重試；題目檔案仍保留在佇列中。`
           : "## 暫時無法可靠作答\n我現在無法完成這題的安全檢查。請稍候再試，或改為補上清楚題目與你的作答步驟。\n\n> AI 可能出錯；重要答案請與教師或可驗算步驟交叉確認。" }]);
     }
   };
@@ -291,7 +313,7 @@ export default function Home() {
             <section aria-label="解題模式" className="mb-5 flex gap-2 overflow-x-auto pb-1 sm:grid sm:grid-cols-3 sm:overflow-visible">{studentModes.map(item => { const Icon = modeIcon(item.key); const selected = mode === item.key; return <button key={item.key} onClick={() => setMode(item.key)} className={`w-[15rem] shrink-0 rounded-2xl border p-4 text-left transition sm:w-auto ${selected ? "border-[#196b63] bg-[#eaf6f3] shadow-[0_12px_25px_-20px_rgba(25,107,99,0.7)]" : "border-slate-200 bg-white hover:border-[#a7d4cd] hover:bg-[#fcfefd]"}`}><div className="flex items-center gap-2"><div className={`flex size-8 items-center justify-center rounded-xl ${selected ? "bg-[#196b63] text-white" : "bg-slate-100 text-slate-500"}`}><Icon className="size-4" /></div><span className="text-sm font-semibold text-slate-800">{item.name}</span></div><p className="mt-2 text-xs leading-5 text-slate-500">{item.description}</p></button>; })}</section>
 
             {!isAuthenticated && !loading && <div className="mb-4 flex items-start gap-3 rounded-2xl border border-[#f2dba9] bg-[#fff9ea] p-4 text-sm text-[#74511b]"><AlertCircle className="mt-0.5 size-5 shrink-0" /><p>你可以先瀏覽介面；登入後才會啟用安全上傳、品牌託管解題、錯題保存與教師協助通知。</p></div>}
-            <AIChatBox messages={messages} onSendMessage={sendQuestion} onAttachmentsSelected={selectAttachments} onClearAttachment={() => { const next = attachments[1]; setAttachments(current => current.slice(1)); setRecognitionDraft(next?.transcription ?? ""); }} onRecognizePhoto={recognizeHandwriting} onAttachmentTranscriptionChange={value => { setRecognitionDraft(value); if (activeAttachment) setAttachments(current => current.map(item => item.localId === activeAttachment.localId ? { ...item, transcription: value } : item)); }} attachmentName={activeAttachment?.file.name} attachmentPreview={activeAttachment?.preview} attachmentKind={activeAttachment?.kind} attachmentTranscription={recognitionDraft} queuedAttachmentNames={attachments.slice(1).map(item => item.file.name)} photoQuality={activeAttachment?.quality} isRecognizing={recognizePhoto.isPending} isLoading={solve.isPending || uploadPhoto.isPending} suggestedPrompts={suggestedPromptsForUnit(grade, unit.key, unit.label)} />
+            <AIChatBox messages={messages} onSendMessage={sendQuestion} onAttachmentsSelected={selectAttachments} onClearAttachment={() => { const next = attachments[1]; setAttachments(current => current.slice(1)); setBatchSessionId(next ? batchSessionId : null); setRecognitionDraft(next?.transcription ?? ""); }} onRecognizePhoto={recognizeHandwriting} onAttachmentTranscriptionChange={value => { setRecognitionDraft(value); if (activeAttachment) setAttachments(current => current.map(item => item.localId === activeAttachment.localId ? { ...item, transcription: value } : item)); }} attachmentName={activeAttachment?.file.name} attachmentPreview={activeAttachment?.preview} attachmentKind={activeAttachment?.kind} attachmentTranscription={recognitionDraft} queuedAttachmentNames={attachments.slice(1).map(item => item.file.name)} photoQuality={activeAttachment?.quality} isRecognizing={recognizePhoto.isPending} isLoading={solve.isPending || uploadPhoto.isPending} suggestedPrompts={suggestedPromptsForUnit(grade, unit.key, unit.label)} batchMaxQuestions={maxBatchQuestions} />
 
             {lastAttempt && <section className="mt-5 rounded-[1.5rem] border border-[#d8ebe7] bg-[#f7fcfa] p-4 sm:p-5"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><p className="flex items-center gap-2 text-sm font-semibold text-[#173b4d]"><NotebookPen className="size-4 text-[#196b63]" />把這題變成你的學習資產</p><p className="mt-1 text-xs leading-5 text-slate-500">信心指標 {lastAttempt.confidence}%{lastAttempt.needsClarification ? "・需要補充題目資訊" : "・已完成結構化解題"}</p></div><div className="flex max-w-full gap-2 overflow-x-auto pb-1 sm:flex-wrap"><Button size="sm" variant="outline" onClick={() => markMistake.mutate({ attemptId: lastAttempt.id, markedWrong: true })} disabled={markMistake.isPending} className="shrink-0 rounded-full border-[#d8bd79] bg-white text-[#76521a] hover:bg-[#fffaf0]"><Tag className="mr-1.5 size-3.5" />標記為常犯錯題</Button><Button size="sm" variant="outline" onClick={() => report("wrong_answer")} disabled={reportConcern.isPending} className="shrink-0 rounded-full border-[#eacbc2] bg-white text-[#9a4331] hover:bg-[#fff5f2]"><FileWarning className="mr-1.5 size-3.5" />回報答案問題</Button><Button size="sm" onClick={() => report("teacher_help")} disabled={reportConcern.isPending} className="shrink-0 rounded-full bg-[#173b4d] hover:bg-[#0f2e3d]"><GraduationCap className="mr-1.5 size-3.5" />請教師協助</Button></div></div>
               <div className="mt-4 rounded-2xl bg-white p-3 ring-1 ring-[#d8ebe7]"><p className="text-xs font-semibold text-[#196b63]">變式練習</p><p className="mt-1 text-sm leading-6 text-slate-700">{lastAttempt.variationQuestion}</p><Textarea value={practiceAnswer} onChange={event => setPracticeAnswer(event.target.value)} placeholder="可先寫下你的答案或思路，之後再回來檢查。" className="mt-3 min-h-20 border-slate-200 text-sm" /><div className="mt-3 flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => saveVariation("not_attempted")} disabled={savePractice.isPending} className="rounded-full">稍後練習</Button><Button size="sm" variant="outline" onClick={() => saveVariation("needs_review")} disabled={savePractice.isPending} className="rounded-full">完成，請幫我回顧</Button><Button size="sm" onClick={() => saveVariation("correct")} disabled={savePractice.isPending} className="rounded-full bg-[#196b63] hover:bg-[#115950]">我已完成</Button></div></div>

@@ -52,4 +52,14 @@ describe("Gemini 結構化數學解題相容層", () => {
       maxOutputTokens: 400,
     })).rejects.toThrow("解題服務暫時無法完成這次處理");
   });
+
+  it("將供應商 429 安全轉為可操作的繁忙提示與等待秒數", async () => {
+    mocks.generateContent.mockRejectedValue(new Error('{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","details":[{"retryDelay":"9.2s"}]}}'));
+    await expect(generateGeminiJson({
+      instruction: "只輸出 JSON。",
+      prompt: "解 x = 1。",
+      responseJsonSchema: { type: "object" },
+      maxOutputTokens: 400,
+    })).rejects.toThrow("約 10 秒後再試");
+  });
 });
