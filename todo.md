@@ -78,5 +78,5 @@
 - [x] 讓教師管理帳號可設定每批多題上限，限制在 5 或 10 題等安全範圍
 - [x] 讓同一檔案／照片的對話可延續追問，並維持本人附件與對話隔離
 - [x] 驗證多題工作階段、教師上限與同檔案追問後同步 GitHub 與正式部署
-- [ ] 修復 Vercel 正式環境遺失的 JavaScript／CSS 資產被 SPA fallback 回傳 index.html 所造成的白屏
-- [ ] 驗證正式 Vercel 資產 MIME type、首頁渲染與多題工作階段入口
+- [x] 修復 Vercel 正式環境遺失的 JavaScript／CSS 資產被 SPA fallback 回傳 index.html 所造成的白屏
+- [x] 驗證正式 Vercel 資產 MIME type、首頁渲染與多題工作階段入口
