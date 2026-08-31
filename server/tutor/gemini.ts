@@ -13,6 +13,8 @@ type GeminiStructuredRequest = {
   responseJsonSchema: Record<string, unknown>;
   image?: GeminiInlineImage;
   maxOutputTokens: number;
+  /** 預設 "solve"；教材擷取流程應明確傳入 "material" 以分流至獨立金鑰。 */
+  purpose?: "solve" | "material";
 };
 
 /** 不將供應商原始錯誤、配額或帳務資訊傳回瀏覽器。 */
@@ -39,10 +41,25 @@ function isTransientProviderError(error: unknown) {
   return /\b429\b|RESOURCE_EXHAUSTED|\b503\b|UNAVAILABLE|\b408\b|timeout/i.test(message);
 }
 
-function getGeminiClient() {
-  const apiKey = process.env.GEMINI_API_KEY?.trim();
+const clientCache = new Map<string, GoogleGenAI>();
+
+/**
+ * `purpose` 決定使用哪一把 API 金鑰：
+ * - "solve"：學生即時解題／手寫辨識，永遠用 GEMINI_API_KEY。
+ * - "material"：教師教材 PDF 擷取，屬低頻、非即時的背景工作。若設定了
+ *   GEMINI_MATERIAL_API_KEY（建議另開一個 Google Cloud 專案／金鑰），
+ *   就改用它，避免教材上傳吃掉學生即時解題共用的每日配額；
+ *   未設定時退回 GEMINI_API_KEY，行為與先前相同，不強制要求額外設定。
+ */
+function getGeminiClient(purpose: "solve" | "material" = "solve") {
+  const apiKey = (purpose === "material" ? process.env.GEMINI_MATERIAL_API_KEY?.trim() : undefined)
+    || process.env.GEMINI_API_KEY?.trim();
   if (!apiKey) throw new Error("Gemini 解題服務尚未設定。");
-  return new GoogleGenAI({ apiKey });
+  const cached = clientCache.get(apiKey);
+  if (cached) return cached;
+  const client = new GoogleGenAI({ apiKey });
+  clientCache.set(apiKey, client);
+  return client;
 }
 
 /**
@@ -51,7 +68,7 @@ function getGeminiClient() {
  */
 export async function generateGeminiJson(request: GeminiStructuredRequest): Promise<string> {
   try {
-    const response = await getGeminiClient().models.generateContent({
+    const response = await getGeminiClient(request.purpose ?? "solve").models.generateContent({
       model: GEMINI_TUTOR_MODEL,
       contents: [{
         role: "user",
