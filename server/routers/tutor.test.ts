@@ -174,10 +174,16 @@ describe("Supabase 國中數學解題路由", () => {
     expect(mocks.uploadTeacherMaterial).toHaveBeenCalledWith(expect.objectContaining({ unitId: UUIDS.unit, mimeType: "text/plain", bytes: expect.any(Buffer) }));
   });
   it("只從目前學生資料產生學習建議與兩種練習單", async () => {
-    mocks.listRecentAttempts.mockResolvedValue([{ id: UUIDS.attempt, questionText: "3x=9", studentMarkedWrong: true, errorTags: "[\"移項符號\"]" }]);
+    mocks.listRecentAttempts.mockResolvedValue([{ id: UUIDS.attempt, questionText: "3x=9", unitKey: "linear-equations", studentMarkedWrong: true, errorTags: "[\"移項符號\"]" }]);
     await expect(caller().learningInsights()).resolves.toMatchObject({ frequentCount: 1 });
-    await expect(caller().exportPracticeSheet({ source: "frequent" })).resolves.toEqual({ filename: "常犯錯題練習單.md", content: "# 練習單" });
-    await expect(caller().exportPracticeSheet({ source: "recent" })).resolves.toEqual({ filename: "近期學習紀錄練習單.md", content: "# 練習單" });
+    const frequentDocx = await caller().exportPracticeSheet({ source: "frequent", format: "docx" });
+    expect(frequentDocx).toMatchObject({ filename: "常犯錯題練習單.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+    expect(typeof frequentDocx.base64).toBe("string");
+    expect(frequentDocx.base64.length).toBeGreaterThan(0);
+    const recentPdf = await caller().exportPracticeSheet({ source: "recent", format: "pdf" });
+    expect(recentPdf).toMatchObject({ filename: "近期學習紀錄練習單.pdf", mimeType: "application/pdf" });
+    expect(typeof recentPdf.base64).toBe("string");
+    expect(recentPdf.base64.length).toBeGreaterThan(0);
     expect(mocks.listRecentAttempts).toHaveBeenCalledWith(UUIDS.appUser);
   });
 });
