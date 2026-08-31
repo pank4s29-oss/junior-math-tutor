@@ -103,10 +103,15 @@ create table public.math_attachments (
   bucket_id text not null default 'math-problems',
   storage_path text not null unique,
   original_name text not null check (char_length(original_name) between 1 and 255),
-  mime_type text not null check (mime_type in ('image/jpeg', 'image/png', 'image/webp')),
+  mime_type text not null check (mime_type in ('image/jpeg', 'image/png', 'image/webp', 'application/pdf')),
   byte_size integer not null check (byte_size > 0 and byte_size <= 5242880),
   recognition_status public.attachment_status not null default 'pending',
-  created_at timestamptz not null default now()
+  -- 學生確認／編輯後的題目辨識文字，讓附件在移出前端暫存後仍可被續問或編輯（見遷移 20260831_13）。
+  transcription text,
+  -- 此附件第一次成功解題時建立／延續的對話串，讓 solve 可只憑 attachmentId 自動延續正確的對話。
+  conversation_id uuid references public.math_conversations(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 
 create table public.math_attempts (
@@ -170,6 +175,8 @@ create trigger approved_contents_set_updated_at before update on public.approved
   for each row execute procedure public.set_updated_at();
 create trigger math_conversations_set_updated_at before update on public.math_conversations
   for each row execute procedure public.set_updated_at();
+create trigger math_attachments_set_updated_at before update on public.math_attachments
+  for each row execute procedure public.set_updated_at();
 create trigger practice_results_set_updated_at before update on public.practice_results
   for each row execute procedure public.set_updated_at();
 create trigger teacher_escalations_set_updated_at before update on public.teacher_escalations
@@ -180,6 +187,7 @@ create trigger daily_usage_set_updated_at before update on public.daily_usage
 -- 支援學生本人資料列存取、教師工作台查詢與用量／案件查詢的索引。
 create index math_conversations_user_created_idx on public.math_conversations (user_id, created_at desc);
 create index math_attachments_user_created_idx on public.math_attachments (user_id, created_at desc);
+create index math_attachments_conversation_idx on public.math_attachments (conversation_id);
 create index math_attempts_user_created_idx on public.math_attempts (user_id, created_at desc);
 create index math_attempts_conversation_idx on public.math_attempts (conversation_id, created_at desc);
 create index practice_results_user_created_idx on public.practice_results (user_id, created_at desc);
