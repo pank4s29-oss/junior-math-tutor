@@ -192,7 +192,11 @@ export const tutorRouter = router({
     const solution = parseTutorSolution(content);
     const responseMarkdown = formatTutorReply(solution);
     const conversationId = existingConversationId ?? await tutorDb.createConversation({ userId: appUser.id, title: (question || `照片題目：${unitLabel}`).slice(0, 180), grade: input.grade, unitKey: input.unitKey });
-    const attemptId = await tutorDb.createMathAttempt({
+    // 上傳的照片／檔案本身資訊不足，AI 只能要求補充題目時，不寫入學習紀錄：
+    // 這種情況不是「解過一題」，只是上傳失敗的提示，留在近期學習紀錄／匯出練習單裡只會造成干擾。
+    // 純文字提問（沒有附件）即使需要澄清仍會保留，因為那多半反映題意本身需要釐清，屬於真實學習歷程。
+    const isIncompleteUpload = solution.needsClarification && Boolean(input.attachmentId);
+    const attemptId = isIncompleteUpload ? null : await tutorDb.createMathAttempt({
       userId: appUser.id, conversationId, grade: input.grade, unitKey: input.unitKey, mode: input.mode,
       questionText: question || "（題目由上傳圖片辨識）", attachmentId: input.attachmentId, responseMarkdown,
       responseJson: JSON.stringify(solution), confidence: solution.confidence, needsClarification: solution.needsClarification,
