@@ -2,6 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { CORE_UNITS, GRADES, type Grade } from "../../shared/mathCurriculum";
 import { buildTutorInstructions, formatTutorReply, parseTutorSolution, tutorResponseFormat } from "../tutor/engine";
+import { buildPracticeSheetDocx, buildPracticeSheetPdf } from "../tutor/exportDocuments";
 import { GEMINI_TUTOR_MODEL, generateGeminiJson } from "../tutor/gemini";
 import * as tutorDb from "../tutor/supabaseDb";
 import * as supabaseTeacherDb from "../tutor/supabaseTeacherDb";
@@ -244,9 +245,15 @@ export const tutorRouter = router({
     const attempts = await tutorDb.listRecentAttempts((await tutorDb.getOrCreateAppUser(ctx.user)).id);
     return tutorDb.buildLearningInsights(attempts);
   }),
-  exportPracticeSheet: protectedProcedure.input(z.object({ source: z.enum(["frequent", "recent"]) })).query(async ({ ctx, input }) => {
+  exportPracticeSheet: protectedProcedure.input(z.object({ source: z.enum(["frequent", "recent"]), format: z.enum(["docx", "pdf"]) })).query(async ({ ctx, input }) => {
     const attempts = await tutorDb.listRecentAttempts((await tutorDb.getOrCreateAppUser(ctx.user)).id);
-    return { filename: input.source === "frequent" ? "常犯錯題練習單.md" : "近期學習紀錄練習單.md", content: tutorDb.buildPracticeSheet(attempts, input.source) };
+    const baseName = input.source === "frequent" ? "常犯錯題練習單" : "近期學習紀錄練習單";
+    if (input.format === "docx") {
+      const buffer = await buildPracticeSheetDocx(attempts, input.source);
+      return { filename: `${baseName}.docx`, base64: buffer.toString("base64"), mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" };
+    }
+    const buffer = await buildPracticeSheetPdf(attempts, input.source);
+    return { filename: `${baseName}.pdf`, base64: buffer.toString("base64"), mimeType: "application/pdf" };
   }),
   practiceHistory: protectedProcedure.query(async ({ ctx }) => tutorDb.listPracticeHistory((await tutorDb.getOrCreateAppUser(ctx.user)).id)),
   savePractice: protectedProcedure.input(z.object({
