@@ -7,6 +7,6 @@ dotenv.config({ path: ".env.local" });
 const port = Number(process.env.TUTOR_API_PORT ?? 3001);
 const app = createApiApp();
 
-app.listen(port, "127.0.0.1", () => {
-  console.log(`Portable tutor API running at http://127.0.0.1:${port}`);
+app.listen(port, process.env.API_BIND_HOST ?? "127.0.0.1", () => {
+  console.log(`Portable tutor API running at http://${process.env.API_BIND_HOST ?? "127.0.0.1"}:${port}`);
 });

@@ -1,0 +1,60 @@
+services:
+  setup:
+    image: node:22-bookworm-slim
+    working_dir: /app
+    volumes:
+      - ./:/app
+      - app_node_modules:/app/node_modules
+    command: sh -c "corepack enable && corepack prepare pnpm@10.4.1 --activate && pnpm install --frozen-lockfile"
+    env_file:
+      - ./.env.base44-defaults
+    restart: "no"
+
+  api:
+    image: node:22-bookworm-slim
+    working_dir: /app
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    volumes:
+      - ./:/app
+      - app_node_modules:/app/node_modules
+    command: sh -c "exec node_modules/.bin/tsx watch server/standalone.ts"
+    env_file:
+      - ./.env.base44-defaults
+      - /run/base44/app.env
+    environment:
+      - NODE_ENV=development
+      - TUTOR_API_PORT=3001
+      - API_BIND_HOST=0.0.0.0
+    restart: unless-stopped
+
+  web:
+    image: node:22-bookworm-slim
+    working_dir: /app
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    volumes:
+      - ./:/app
+      - app_node_modules:/app/node_modules
+    command: sh -c "exec node_modules/.bin/vite --host 0.0.0.0 --port 5173"
+    env_file:
+      - ./.env.base44-defaults
+      - /run/base44/app.env
+    environment:
+      - NODE_ENV=development
+      - TUTOR_API_HOST=api
+      - TUTOR_API_PORT=3001
+    ports:
+      - "3000:5173"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:5173/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+    restart: unless-stopped
+
+volumes:
+  app_node_modules:
