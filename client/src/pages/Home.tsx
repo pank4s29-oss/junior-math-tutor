@@ -1,5 +1,6 @@
 import { useAuth } from "@/_core/hooks/useAuth";
 import { AIChatBox, type Message, type PhotoQuality } from "@/components/AIChatBox";
+import { AttachmentHistoryPanel, type AttachmentHistoryItem } from "@/components/AttachmentHistoryPanel";
 import { AuthDialogNext } from "@/components/AuthDialogNext";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -10,7 +11,9 @@ import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Link } from "wouter";
 
-type PendingAttachment = { localId: string; file: File; kind: "image" | "pdf" | "text"; preview?: string; normalizedDataUrl?: string; quality: PhotoQuality; attachmentId?: string; transcription?: string; conversationId?: string };
+// conversationId 不再需要由前端保存：伺服器會在附件第一次成功解題後，自動把 conversation
+// 與該 attachmentId 綁定；之後只要帶著同一個 attachmentId 追問，就能自動延續正確的對話。
+type PendingAttachment = { localId: string; file: File; kind: "image" | "pdf" | "text"; preview?: string; normalizedDataUrl?: string; quality: PhotoQuality; attachmentId?: string; transcription?: string };
 type LastAttempt = { id: string; variationQuestion: string; confidence: number; needsClarification: boolean };
 type LearningAttempt = { id: string; questionText: string; confidence: number; errorTags: string; needsClarification: boolean };
 type StudentMode = { key: string; name: string; description: string };
@@ -97,6 +100,9 @@ export default function Home() {
   const [remaining, setRemaining] = useState<number | null>(null);
   const [authDialogOpen, setAuthDialogOpen] = useState(false);
   const [batchSessionId, setBatchSessionId] = useState<string | null>(null);
+  // 從「上傳紀錄」面板選取的檔案：一旦設定，追問會直接使用這個 attachmentId，
+  // 不受目前上傳佇列（先進先出）影響，修復「解完第 1 題後無法追問同張照片第 13 題」的問題。
+  const [selectedHistoryAttachment, setSelectedHistoryAttachment] = useState<AttachmentHistoryItem | null>(null);
 
   const curriculum = trpc.tutor.curriculum.useQuery(undefined, { enabled: isAuthenticated, retry: false });
   const solutionModes = trpc.tutor.solutionModes.useQuery(undefined, { enabled: isAuthenticated, retry: false });
@@ -108,6 +114,7 @@ export default function Home() {
   const activeMode = studentModes.find(item => item.key === mode) ?? studentModes[0] ?? DEFAULT_TUTOR_MODES[0];
   const ModeIcon = modeIcon(activeMode.key);
   const activeAttachment = attachments[0] ?? null;
+  const utils = trpc.useUtils();
   const history = trpc.tutor.learningLoop.useQuery(undefined, { enabled: isAuthenticated }) as unknown as { data?: LearningAttempt[]; isLoading: boolean; refetch: () => unknown };
   const uploadPhoto = trpc.tutor.uploadPhoto.useMutation();
   const recognizePhoto = trpc.tutor.recognizePhoto.useMutation();
@@ -142,6 +149,7 @@ export default function Home() {
 
   const selectAttachments = async (files: File[]) => {
     try {
+      setSelectedHistoryAttachment(null);
       const available = batchSessionId ? 0 : Math.max(0, maxBatchQuestions - attachments.length);
       const limited = files.slice(0, available);
       if (!limited.length) { toast.message(`目前這批最多 ${maxBatchQuestions} 題；請先完成或清除待處理題目。`); return; }
@@ -224,27 +232,35 @@ export default function Home() {
     setMessages(current => [...current, { role: "user", content: question }]);
     setLastAttempt(null);
     try {
+      // 優先使用「上傳紀錄」面板選取的檔案；否則沿用目前上傳佇列中的下一筆。
+      // conversationId 不需要前端傳遞：伺服器會依 attachmentId 自動找回並延續正確的對話。
       let attachmentId: string | undefined;
-      if (activeAttachment) attachmentId = await ensureAttachmentUploaded();
+      if (selectedHistoryAttachment) attachmentId = selectedHistoryAttachment.id;
+      else if (activeAttachment) attachmentId = await ensureAttachmentUploaded();
+
       let activeSessionId = batchSessionId;
-      if (activeAttachment && !activeSessionId) {
+      if (activeAttachment && !selectedHistoryAttachment && !activeSessionId) {
         const session = await startBatchSession.mutateAsync({ grade, unitKey: unit.key, questionCount: attachments.length });
         activeSessionId = session.id;
         setBatchSessionId(session.id);
       }
-      const result = await solve.mutateAsync({ question, grade, unitKey: unit.key, mode, attachmentId, sessionId: activeSessionId ?? undefined, conversationId: activeAttachment?.conversationId });
+      const result = await solve.mutateAsync({ question, grade, unitKey: unit.key, mode, attachmentId, sessionId: selectedHistoryAttachment ? undefined : activeSessionId ?? undefined });
       setMessages(current => [...current, { role: "assistant", content: result.responseMarkdown }]);
       setLastAttempt({ id: result.attemptId, variationQuestion: result.solution.variationQuestion, confidence: result.solution.confidence, needsClarification: result.solution.needsClarification });
       setRemaining(result.remaining);
-      const nextAttachment = attachments[1];
-      if (nextAttachment) {
-        setAttachments(current => current.slice(1));
-        setRecognitionDraft(nextAttachment.transcription ?? "");
-      } else if (activeAttachment) {
-        setAttachments(current => current.map(item => item.localId === activeAttachment.localId ? { ...item, conversationId: result.conversationId } : item));
-        setRecognitionDraft(activeAttachment.transcription ?? "");
+      void utils.tutor.listAttachments.invalidate();
+      if (selectedHistoryAttachment) {
+        // 保持選取狀態，讓學生可以直接針對同一張圖片繼續追問下一題（例如第 13 題）。
       } else {
-        setRecognitionDraft("");
+        const nextAttachment = attachments[1];
+        if (nextAttachment) {
+          setAttachments(current => current.slice(1));
+          setRecognitionDraft(nextAttachment.transcription ?? "");
+        } else if (activeAttachment) {
+          setRecognitionDraft(activeAttachment.transcription ?? "");
+        } else {
+          setRecognitionDraft("");
+        }
       }
       history.refetch();
       if (result.solution.needsClarification) toast.message("我需要更多題目資訊，請依回覆補拍或補充文字。", { icon: <CircleHelp className="size-4" /> });
@@ -313,7 +329,34 @@ export default function Home() {
             <section aria-label="解題模式" className="mb-5 flex gap-2 overflow-x-auto pb-1 sm:grid sm:grid-cols-3 sm:overflow-visible">{studentModes.map(item => { const Icon = modeIcon(item.key); const selected = mode === item.key; return <button key={item.key} onClick={() => setMode(item.key)} className={`w-[15rem] shrink-0 rounded-2xl border p-4 text-left transition sm:w-auto ${selected ? "border-[#196b63] bg-[#eaf6f3] shadow-[0_12px_25px_-20px_rgba(25,107,99,0.7)]" : "border-slate-200 bg-white hover:border-[#a7d4cd] hover:bg-[#fcfefd]"}`}><div className="flex items-center gap-2"><div className={`flex size-8 items-center justify-center rounded-xl ${selected ? "bg-[#196b63] text-white" : "bg-slate-100 text-slate-500"}`}><Icon className="size-4" /></div><span className="text-sm font-semibold text-slate-800">{item.name}</span></div><p className="mt-2 text-xs leading-5 text-slate-500">{item.description}</p></button>; })}</section>
 
             {!isAuthenticated && !loading && <div className="mb-4 flex items-start gap-3 rounded-2xl border border-[#f2dba9] bg-[#fff9ea] p-4 text-sm text-[#74511b]"><AlertCircle className="mt-0.5 size-5 shrink-0" /><p>你可以先瀏覽介面；登入後才會啟用安全上傳、品牌託管解題、錯題保存與教師協助通知。</p></div>}
-            <AIChatBox messages={messages} onSendMessage={sendQuestion} onAttachmentsSelected={selectAttachments} onClearAttachment={() => { const next = attachments[1]; setAttachments(current => current.slice(1)); setBatchSessionId(next ? batchSessionId : null); setRecognitionDraft(next?.transcription ?? ""); }} onRecognizePhoto={recognizeHandwriting} onAttachmentTranscriptionChange={value => { setRecognitionDraft(value); if (activeAttachment) setAttachments(current => current.map(item => item.localId === activeAttachment.localId ? { ...item, transcription: value } : item)); }} attachmentName={activeAttachment?.file.name} attachmentPreview={activeAttachment?.preview} attachmentKind={activeAttachment?.kind} attachmentTranscription={recognitionDraft} queuedAttachmentNames={attachments.slice(1).map(item => item.file.name)} photoQuality={activeAttachment?.quality} isRecognizing={recognizePhoto.isPending} isLoading={solve.isPending || uploadPhoto.isPending} suggestedPrompts={suggestedPromptsForUnit(grade, unit.key, unit.label)} batchMaxQuestions={maxBatchQuestions} />
+            <AIChatBox
+              messages={messages}
+              onSendMessage={sendQuestion}
+              onAttachmentsSelected={selectAttachments}
+              onClearAttachment={() => {
+                if (selectedHistoryAttachment) { setSelectedHistoryAttachment(null); setRecognitionDraft(""); return; }
+                const next = attachments[1];
+                setAttachments(current => current.slice(1));
+                setBatchSessionId(next ? batchSessionId : null);
+                setRecognitionDraft(next?.transcription ?? "");
+              }}
+              onRecognizePhoto={recognizeHandwriting}
+              onAttachmentTranscriptionChange={value => {
+                setRecognitionDraft(value);
+                if (selectedHistoryAttachment) return;
+                if (activeAttachment) setAttachments(current => current.map(item => item.localId === activeAttachment.localId ? { ...item, transcription: value } : item));
+              }}
+              attachmentName={selectedHistoryAttachment ? selectedHistoryAttachment.filename : activeAttachment?.file.name}
+              attachmentPreview={selectedHistoryAttachment ? undefined : activeAttachment?.preview}
+              attachmentKind={selectedHistoryAttachment ? "text" : activeAttachment?.kind}
+              attachmentTranscription={recognitionDraft}
+              queuedAttachmentNames={selectedHistoryAttachment ? [] : attachments.slice(1).map(item => item.file.name)}
+              photoQuality={selectedHistoryAttachment ? { tone: "ready", message: "已選取上傳紀錄中的題目，直接輸入你的追問即可。" } : activeAttachment?.quality}
+              isRecognizing={recognizePhoto.isPending}
+              isLoading={solve.isPending || uploadPhoto.isPending}
+              suggestedPrompts={suggestedPromptsForUnit(grade, unit.key, unit.label)}
+              batchMaxQuestions={maxBatchQuestions}
+            />
 
             {lastAttempt && <section className="mt-5 rounded-[1.5rem] border border-[#d8ebe7] bg-[#f7fcfa] p-4 sm:p-5"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><p className="flex items-center gap-2 text-sm font-semibold text-[#173b4d]"><NotebookPen className="size-4 text-[#196b63]" />把這題變成你的學習資產</p><p className="mt-1 text-xs leading-5 text-slate-500">信心指標 {lastAttempt.confidence}%{lastAttempt.needsClarification ? "・需要補充題目資訊" : "・已完成結構化解題"}</p></div><div className="flex max-w-full gap-2 overflow-x-auto pb-1 sm:flex-wrap"><Button size="sm" variant="outline" onClick={() => markMistake.mutate({ attemptId: lastAttempt.id, markedWrong: true })} disabled={markMistake.isPending} className="shrink-0 rounded-full border-[#d8bd79] bg-white text-[#76521a] hover:bg-[#fffaf0]"><Tag className="mr-1.5 size-3.5" />標記為常犯錯題</Button><Button size="sm" variant="outline" onClick={() => report("wrong_answer")} disabled={reportConcern.isPending} className="shrink-0 rounded-full border-[#eacbc2] bg-white text-[#9a4331] hover:bg-[#fff5f2]"><FileWarning className="mr-1.5 size-3.5" />回報答案問題</Button><Button size="sm" onClick={() => report("teacher_help")} disabled={reportConcern.isPending} className="shrink-0 rounded-full bg-[#173b4d] hover:bg-[#0f2e3d]"><GraduationCap className="mr-1.5 size-3.5" />請教師協助</Button></div></div>
               <div className="mt-4 rounded-2xl bg-white p-3 ring-1 ring-[#d8ebe7]"><p className="text-xs font-semibold text-[#196b63]">變式練習</p><p className="mt-1 text-sm leading-6 text-slate-700">{lastAttempt.variationQuestion}</p><Textarea value={practiceAnswer} onChange={event => setPracticeAnswer(event.target.value)} placeholder="可先寫下你的答案或思路，之後再回來檢查。" className="mt-3 min-h-20 border-slate-200 text-sm" /><div className="mt-3 flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => saveVariation("not_attempted")} disabled={savePractice.isPending} className="rounded-full">稍後練習</Button><Button size="sm" variant="outline" onClick={() => saveVariation("needs_review")} disabled={savePractice.isPending} className="rounded-full">完成，請幫我回顧</Button><Button size="sm" onClick={() => saveVariation("correct")} disabled={savePractice.isPending} className="rounded-full bg-[#196b63] hover:bg-[#115950]">我已完成</Button></div></div>
@@ -321,6 +364,16 @@ export default function Home() {
           </div>
 
           <aside className="space-y-5 lg:pt-1">
+            {isAuthenticated && (
+              <AttachmentHistoryPanel
+                selectedAttachmentId={selectedHistoryAttachment?.id ?? null}
+                onSelect={item => {
+                  setSelectedHistoryAttachment(item);
+                  setRecognitionDraft(item?.transcription ?? "");
+                  if (item) { setAttachments([]); setBatchSessionId(null); }
+                }}
+              />
+            )}
             <section className="rounded-[1.5rem] border border-slate-200 bg-white p-5 shadow-sm"><div className="flex items-center justify-between"><div><p className="text-xs font-semibold tracking-[0.12em] text-[#196b63]">TODAY'S FOCUS</p><h2 className="mt-1 text-lg font-semibold tracking-tight text-[#173b4d]">{GRADE_LABELS[grade]}・{unit.label}</h2></div><div className="flex size-10 items-center justify-center rounded-2xl bg-[#f4e8d6] text-[#9a5b21]"><ModeIcon className="size-5" /></div></div><div className="mt-5 rounded-2xl bg-[#f7f8f5] p-3"><p className="text-xs text-slate-500">目前模式</p><p className="mt-1 text-sm font-semibold text-slate-700">{activeMode.name}</p><p className="mt-1 text-xs leading-5 text-slate-500">{activeMode.description}</p></div><div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-3 text-xs"><span className="flex items-center gap-1.5 text-slate-500"><Clock3 className="size-3.5" />每日安全額度</span><span className="font-semibold text-[#196b63]">{remaining === null ? "20 題上限" : `今日剩餘 ${remaining} 題`}</span></div></section>
             <section className="rounded-[1.5rem] bg-[#e9f4f1] p-5"><p className="flex items-center gap-2 text-sm font-semibold text-[#173b4d]"><ShieldCheck className="size-4 text-[#196b63]" />可靠解題守則</p><div className="mt-4 space-y-3 text-xs leading-5 text-slate-600"><p>先確認題意；照片模糊或條件不足時，會請你補拍或補充文字。</p><p>每次回覆固定提供題意、關鍵觀念、步驟理由、驗算與易錯點。</p><p>AI 可能犯錯；重要答案請檢查步驟，或直接請教師協助。</p></div></section>
             <section className="rounded-[1.5rem] border border-slate-200 bg-white p-5 shadow-sm"><div className="flex items-center justify-between"><div><p className="text-xs font-semibold tracking-[0.12em] text-[#196b63]">我的錯題循環</p><h2 className="mt-1 text-lg font-semibold tracking-tight text-[#173b4d]">近期學習紀錄</h2></div><Upload className="size-5 text-slate-300" /></div>{!isAuthenticated ? <p className="mt-4 text-sm leading-6 text-slate-500">登入後，這裡會整理你解過的題目、錯誤標籤與變式練習。</p> : history.isLoading ? <div className="mt-4 flex items-center gap-2 text-sm text-slate-500"><Loader2 className="size-4 animate-spin" />正在讀取紀錄…</div> : history.data?.length ? <div className="mt-4 space-y-3">{history.data.slice(0, 4).map(item => { let tags: string[] = []; try { tags = JSON.parse(item.errorTags); } catch { tags = []; } return <div key={item.id} className="rounded-xl border border-slate-100 bg-[#fcfdfc] p-3"><p className="line-clamp-2 text-xs font-medium leading-5 text-slate-700">{item.questionText}</p><div className="mt-2 flex items-center justify-between text-[11px]"><span className="text-slate-400">信心 {item.confidence}%</span><span className="text-[#196b63]">{tags[0] || "已完成"}</span></div></div>; })}<Link href="/review" className="mt-1 flex items-center gap-1 text-xs font-semibold text-[#196b63] hover:text-[#115950]">查看完整錯題本 <ArrowRight className="size-3.5" /></Link></div> : <div className="mt-4 rounded-xl bg-[#f7f8f5] p-3 text-xs leading-5 text-slate-500">第一筆解題紀錄會出現在這裡。完成後請回看變式練習，建立真正的錯題循環。</div>}</section>
