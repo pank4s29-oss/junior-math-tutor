@@ -64,9 +64,61 @@ export async function consumeSolveQuota(userId: string) {
 }
 
 /** 僅在已通過本次額度檢查、但尚未成功取得模型回覆時退還一次計次。 */
+async function callRefundRpc(userId: string) {
+  const { data, error } = await supabase().rpc("refund_tutor_quota", { p_user_id: userId });
+  if (error) throw new Error(error.message);
+  return Boolean((data as { refunded?: boolean } | null)?.refunded);
+}
+
+/**
+ * 失敗時重試一次；若仍失敗，寫入 tutor_quota_refund_failures 供教師工作台追蹤與人工核帳，
+ * 避免像先前只印 console.error，重啟或未接 log 平台時學生額度悄悄減少卻無人知曉。
+ */
 export async function refundSolveQuota(userId: string) {
-  const { error } = await supabase().rpc("refund_tutor_quota", { p_user_id: userId });
-  fail(error, "退還暫時失敗的解題額度");
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await callRefundRpc(userId);
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  const message = lastError instanceof Error ? lastError.message : "未知錯誤";
+  console.error("Failed to refund tutor quota after retry", { message });
+  try {
+    await supabase().from("tutor_quota_refund_failures").insert({
+      user_id: userId,
+      error_message: message.slice(0, 2000),
+      retry_count: 1,
+    });
+  } catch (persistError) {
+    console.error("Failed to persist tutor quota refund failure record", {
+      message: persistError instanceof Error ? persistError.message : "未知錯誤",
+    });
+  }
+}
+
+export async function listQuotaRefundFailures() {
+  const { data, error } = await supabase()
+    .from("tutor_quota_refund_failures")
+    .select("id, user_id, usage_date, error_message, retry_count, resolved, created_at")
+    .eq("resolved", false)
+    .order("created_at", { ascending: false })
+    .limit(50);
+  fail(error, "讀取額度退還失敗紀錄");
+  return (data ?? []).map((row: any) => ({
+    id: String(row.id), userId: String(row.user_id), usageDate: row.usage_date,
+    errorMessage: row.error_message, retryCount: Number(row.retry_count), resolved: Boolean(row.resolved),
+    createdAt: row.created_at,
+  }));
+}
+
+/** 教師確認已手動核對／補回額度後，將紀錄標記為已處理。 */
+export async function resolveQuotaRefundFailure(id: string) {
+  const { error } = await supabase().from("tutor_quota_refund_failures")
+    .update({ resolved: true, resolved_at: new Date().toISOString() }).eq("id", id);
+  fail(error, "更新額度退還失敗紀錄");
 }
 
 export async function uploadMathPhoto(input: { userId: string; filename: string; mimeType: string; bytes: Buffer }) {
@@ -100,14 +152,16 @@ export async function uploadMathPhoto(input: { userId: string; filename: string;
 export async function getAttachmentForUser(userId: string, attachmentId: string) {
   const { data, error } = await supabase()
     .from("math_attachments")
-    .select("id, storage_path, mime_type, recognition_status")
+    .select("id, storage_path, mime_type, recognition_status, transcription, conversation_id, original_name")
     .eq("id", attachmentId)
     .eq("user_id", userId)
     .maybeSingle();
   fail(error, "讀取題目照片參照");
   return data ? {
     id: String(data.id), storagePath: String(data.storage_path), mimeType: String(data.mime_type),
-    recognitionStatus: String(data.recognition_status),
+    recognitionStatus: String(data.recognition_status), transcription: data.transcription as string | null,
+    conversationId: data.conversation_id ? String(data.conversation_id) : undefined,
+    originalName: String(data.original_name),
   } : undefined;
 }
 
@@ -135,9 +189,74 @@ export async function createAttachmentSignedUrl(storagePath: string) {
   return data.signedUrl;
 }
 
-export async function updateAttachmentRecognition(attachmentId: string, status: "readable" | "unclear") {
-  const { error } = await supabase().from("math_attachments").update({ recognition_status: status }).eq("id", attachmentId);
+/** transcription 為選填：辨識流程確認可讀時一併持久化文字，讓附件被移出前端佇列後仍可回溯與續問。 */
+export async function updateAttachmentRecognition(attachmentId: string, status: "readable" | "unclear", transcription?: string) {
+  const update: Record<string, unknown> = { recognition_status: status };
+  if (transcription !== undefined) update.transcription = transcription.slice(0, 4000) || null;
+  const { error } = await supabase().from("math_attachments").update(update).eq("id", attachmentId);
   fail(error, "更新題目辨識狀態");
+}
+
+/**
+ * 只在附件尚未綁定任何 conversation 時寫入，避免同一附件被多個對話串搶佔。
+ * 由 solve 在第一次成功建立／延續對話後呼叫，之後同一附件的後續追問即可
+ * 只憑 attachmentId 自動找回正確的 conversation，不再依賴前端記得 conversationId。
+ */
+export async function linkAttachmentConversationIfMissing(attachmentId: string, conversationId: string) {
+  const { error } = await supabase().from("math_attachments")
+    .update({ conversation_id: conversationId })
+    .eq("id", attachmentId)
+    .is("conversation_id", null);
+  fail(error, "建立題目照片與對話的關聯");
+}
+
+/** 學生上傳紀錄：依時間新到舊列出本人的附件，供「選擇特定上傳檔案繼續追問」介面使用。 */
+export async function listAttachmentsForUser(userId: string) {
+  const { data, error } = await supabase()
+    .from("math_attachments")
+    .select("id, original_name, mime_type, recognition_status, transcription, conversation_id, created_at, updated_at")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(50);
+  fail(error, "讀取上傳紀錄");
+  return (data ?? []).map((row: any) => ({
+    id: String(row.id), filename: String(row.original_name), mimeType: String(row.mime_type),
+    recognitionStatus: String(row.recognition_status), transcription: row.transcription as string | null,
+    conversationId: row.conversation_id ? String(row.conversation_id) : undefined,
+    createdAt: row.created_at, updatedAt: row.updated_at,
+  }));
+}
+
+export async function renameAttachment(userId: string, attachmentId: string, filename: string) {
+  const safeName = filename.replace(/[\u0000-\u001f]/g, "").trim().slice(0, 160) || "題目檔案";
+  const { data, error } = await supabase().from("math_attachments")
+    .update({ original_name: safeName }).eq("id", attachmentId).eq("user_id", userId)
+    .select("id").maybeSingle();
+  fail(error, "重新命名題目檔案");
+  if (!data) throw new Error("找不到這個上傳檔案，可能已被刪除。");
+}
+
+export async function updateAttachmentTranscriptionForUser(userId: string, attachmentId: string, transcription: string) {
+  const { data, error } = await supabase().from("math_attachments")
+    .update({ transcription: transcription.replace(/\u0000/g, "").trim().slice(0, 4000) || null })
+    .eq("id", attachmentId).eq("user_id", userId)
+    .select("id").maybeSingle();
+  fail(error, "更新題目辨識文字");
+  if (!data) throw new Error("找不到這個上傳檔案，可能已被刪除。");
+}
+
+/**
+ * 刪除附件的私有檔案與資料列。math_attempts.attachment_id 設有 on delete set null，
+ * 因此刪除附件不會影響既有解題紀錄，只會讓紀錄失去圖片參照（題幹文字仍完整保留）。
+ */
+export async function deleteAttachmentForUser(userId: string, attachmentId: string) {
+  const attachment = await getAttachmentForUser(userId, attachmentId);
+  if (!attachment) throw new Error("找不到這個上傳檔案，可能已被刪除。");
+  const { error: deleteRowError } = await supabase().from("math_attachments")
+    .delete().eq("id", attachmentId).eq("user_id", userId);
+  fail(deleteRowError, "刪除上傳檔案紀錄");
+  const { error: removeError } = await supabase().storage.from(MATH_BUCKET).remove([attachment.storagePath]);
+  if (removeError) console.error("Failed to remove attachment storage object after row delete", { message: removeError.message, attachmentId });
 }
 
 export async function createConversation(input: { userId: string; title: string; grade: Grade; unitKey: string }) {
