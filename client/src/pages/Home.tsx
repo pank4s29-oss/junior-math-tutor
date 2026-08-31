@@ -14,7 +14,7 @@ import { Link } from "wouter";
 // conversationId 不再需要由前端保存：伺服器會在附件第一次成功解題後，自動把 conversation
 // 與該 attachmentId 綁定；之後只要帶著同一個 attachmentId 追問，就能自動延續正確的對話。
 type PendingAttachment = { localId: string; file: File; kind: "image" | "pdf" | "text"; preview?: string; normalizedDataUrl?: string; quality: PhotoQuality; attachmentId?: string; transcription?: string };
-type LastAttempt = { id: string; variationQuestion: string; confidence: number; needsClarification: boolean };
+type LastAttempt = { id: string | null; variationQuestion: string; confidence: number; needsClarification: boolean };
 type LearningAttempt = { id: string; questionText: string; confidence: number; errorTags: string; needsClarification: boolean };
 type StudentMode = { key: string; name: string; description: string };
 
@@ -281,7 +281,7 @@ export default function Home() {
   };
 
   const report = async (reason: "wrong_answer" | "teacher_help" | "unclear_photo") => {
-    if (!lastAttempt) return;
+    if (!lastAttempt?.id) return;
     try {
       const result = await reportConcern.mutateAsync({ attemptId: lastAttempt.id, reason });
       toast.success(result.notified ? "已通知教師，會納入品質檢查。" : "已記錄回報，教師工作台會顯示此項目。");
@@ -291,7 +291,7 @@ export default function Home() {
   };
 
   const saveVariation = async (status: "not_attempted" | "correct" | "incorrect" | "needs_review") => {
-    if (!lastAttempt) return;
+    if (!lastAttempt?.id) return;
     try {
       await savePractice.mutateAsync({ sourceAttemptId: lastAttempt.id, question: lastAttempt.variationQuestion, studentAnswer: practiceAnswer || undefined, status });
       toast.success("變式練習已加入你的學習紀錄。");
@@ -358,9 +358,16 @@ export default function Home() {
               batchMaxQuestions={maxBatchQuestions}
             />
 
-            {lastAttempt && <section className="mt-5 rounded-[1.5rem] border border-[#d8ebe7] bg-[#f7fcfa] p-4 sm:p-5"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><p className="flex items-center gap-2 text-sm font-semibold text-[#173b4d]"><NotebookPen className="size-4 text-[#196b63]" />把這題變成你的學習資產</p><p className="mt-1 text-xs leading-5 text-slate-500">信心指標 {lastAttempt.confidence}%{lastAttempt.needsClarification ? "・需要補充題目資訊" : "・已完成結構化解題"}</p></div><div className="flex max-w-full gap-2 overflow-x-auto pb-1 sm:flex-wrap"><Button size="sm" variant="outline" onClick={() => markMistake.mutate({ attemptId: lastAttempt.id, markedWrong: true })} disabled={markMistake.isPending} className="shrink-0 rounded-full border-[#d8bd79] bg-white text-[#76521a] hover:bg-[#fffaf0]"><Tag className="mr-1.5 size-3.5" />標記為常犯錯題</Button><Button size="sm" variant="outline" onClick={() => report("wrong_answer")} disabled={reportConcern.isPending} className="shrink-0 rounded-full border-[#eacbc2] bg-white text-[#9a4331] hover:bg-[#fff5f2]"><FileWarning className="mr-1.5 size-3.5" />回報答案問題</Button><Button size="sm" onClick={() => report("teacher_help")} disabled={reportConcern.isPending} className="shrink-0 rounded-full bg-[#173b4d] hover:bg-[#0f2e3d]"><GraduationCap className="mr-1.5 size-3.5" />請教師協助</Button></div></div>
-              <div className="mt-4 rounded-2xl bg-white p-3 ring-1 ring-[#d8ebe7]"><p className="text-xs font-semibold text-[#196b63]">變式練習</p><p className="mt-1 text-sm leading-6 text-slate-700">{lastAttempt.variationQuestion}</p><Textarea value={practiceAnswer} onChange={event => setPracticeAnswer(event.target.value)} placeholder="可先寫下你的答案或思路，之後再回來檢查。" className="mt-3 min-h-20 border-slate-200 text-sm" /><div className="mt-3 flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => saveVariation("not_attempted")} disabled={savePractice.isPending} className="rounded-full">稍後練習</Button><Button size="sm" variant="outline" onClick={() => saveVariation("needs_review")} disabled={savePractice.isPending} className="rounded-full">完成，請幫我回顧</Button><Button size="sm" onClick={() => saveVariation("correct")} disabled={savePractice.isPending} className="rounded-full bg-[#196b63] hover:bg-[#115950]">我已完成</Button></div></div>
-            </section>}
+            {lastAttempt && (lastAttempt.id ? (
+              <section className="mt-5 rounded-[1.5rem] border border-[#d8ebe7] bg-[#f7fcfa] p-4 sm:p-5"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><p className="flex items-center gap-2 text-sm font-semibold text-[#173b4d]"><NotebookPen className="size-4 text-[#196b63]" />把這題變成你的學習資產</p><p className="mt-1 text-xs leading-5 text-slate-500">信心指標 {lastAttempt.confidence}%{lastAttempt.needsClarification ? "・需要補充題目資訊" : "・已完成結構化解題"}</p></div><div className="flex max-w-full gap-2 overflow-x-auto pb-1 sm:flex-wrap"><Button size="sm" variant="outline" onClick={() => markMistake.mutate({ attemptId: lastAttempt.id!, markedWrong: true })} disabled={markMistake.isPending} className="shrink-0 rounded-full border-[#d8bd79] bg-white text-[#76521a] hover:bg-[#fffaf0]"><Tag className="mr-1.5 size-3.5" />標記為常犯錯題</Button><Button size="sm" variant="outline" onClick={() => report("wrong_answer")} disabled={reportConcern.isPending} className="shrink-0 rounded-full border-[#eacbc2] bg-white text-[#9a4331] hover:bg-[#fff5f2]"><FileWarning className="mr-1.5 size-3.5" />回報答案問題</Button><Button size="sm" onClick={() => report("teacher_help")} disabled={reportConcern.isPending} className="shrink-0 rounded-full bg-[#173b4d] hover:bg-[#0f2e3d]"><GraduationCap className="mr-1.5 size-3.5" />請教師協助</Button></div></div>
+                <div className="mt-4 rounded-2xl bg-white p-3 ring-1 ring-[#d8ebe7]"><p className="text-xs font-semibold text-[#196b63]">變式練習</p><p className="mt-1 text-sm leading-6 text-slate-700">{lastAttempt.variationQuestion}</p><Textarea value={practiceAnswer} onChange={event => setPracticeAnswer(event.target.value)} placeholder="可先寫下你的答案或思路，之後再回來檢查。" className="mt-3 min-h-20 border-slate-200 text-sm" /><div className="mt-3 flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => saveVariation("not_attempted")} disabled={savePractice.isPending} className="rounded-full">稍後練習</Button><Button size="sm" variant="outline" onClick={() => saveVariation("needs_review")} disabled={savePractice.isPending} className="rounded-full">完成，請幫我回顧</Button><Button size="sm" onClick={() => saveVariation("correct")} disabled={savePractice.isPending} className="rounded-full bg-[#196b63] hover:bg-[#115950]">我已完成</Button></div></div>
+              </section>
+            ) : (
+              // 這次是因為上傳的照片／檔案資訊不足才需要補充，不會寫入學習紀錄，所以沒有可標記／建立練習的對象。
+              <section className="mt-5 rounded-[1.5rem] border border-[#f0dcc0] bg-[#fffaf2] p-4 text-xs leading-5 text-[#8a5a1f] sm:p-5">
+                圖片或檔案的題目資訊還不夠完整，這次不會計入學習紀錄。請補拍清楚一點，或直接補充題目文字後再問一次。
+              </section>
+            ))}
           </div>
 
           <aside className="space-y-5 lg:pt-1">
