@@ -176,19 +176,11 @@ export default defineConfig({
     host: true,
     proxy: {
       "/api": {
-        target: `http://127.0.0.1:${process.env.TUTOR_API_PORT ?? 3001}`,
+        target: `http://${process.env.TUTOR_API_HOST ?? "127.0.0.1"}:${process.env.TUTOR_API_PORT ?? 3001}`,
         changeOrigin: true,
       },
     },
-    allowedHosts: [
-      ".manuspre.computer",
-      ".manus.computer",
-      ".manus-asia.computer",
-      ".manuscomputer.ai",
-      ".manusvm.computer",
-      "localhost",
-      "127.0.0.1",
-    ],
+    allowedHosts: true,
     fs: {
       strict: true,
       deny: ["**/.*"],
