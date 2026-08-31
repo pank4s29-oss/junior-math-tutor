@@ -102,6 +102,7 @@ export default function Home() {
   const [remaining, setRemaining] = useState<number | null>(null);
   const [authDialogOpen, setAuthDialogOpen] = useState(false);
   const [batchSessionId, setBatchSessionId] = useState<string | null>(null);
+  const [isExportingHistory, setIsExportingHistory] = useState(false);
   // 從「上傳紀錄」面板選取的檔案：一旦設定，追問會直接使用這個 attachmentId，
   // 不受目前上傳佇列（先進先出）影響，修復「解完第 1 題後無法追問同張照片第 13 題」的問題。
   const [selectedHistoryAttachment, setSelectedHistoryAttachment] = useState<AttachmentHistoryItem | null>(null);
@@ -292,6 +293,19 @@ export default function Home() {
     }
   };
 
+  const exportHistory = async (format: "docx" | "pdf") => {
+    setIsExportingHistory(true);
+    try {
+      const result = await utils.client.tutor.exportPracticeSheet.query({ source: "recent", format });
+      downloadBase64File(result.filename, result.base64, result.mimeType);
+      toast.success("近期學習紀錄練習單已匯出。");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "練習單匯出失敗，請稍後再試。");
+    } finally {
+      setIsExportingHistory(false);
+    }
+  };
+
   const saveVariation = async (status: "not_attempted" | "correct" | "incorrect" | "needs_review") => {
     if (!lastAttempt?.id) return;
     try {
@@ -385,7 +399,7 @@ export default function Home() {
             )}
             <section className="rounded-[1.5rem] border border-slate-200 bg-white p-5 shadow-sm"><div className="flex items-center justify-between"><div><p className="text-xs font-semibold tracking-[0.12em] text-[#196b63]">TODAY'S FOCUS</p><h2 className="mt-1 text-lg font-semibold tracking-tight text-[#173b4d]">{GRADE_LABELS[grade]}・{unit.label}</h2></div><div className="flex size-10 items-center justify-center rounded-2xl bg-[#f4e8d6] text-[#9a5b21]"><ModeIcon className="size-5" /></div></div><div className="mt-5 rounded-2xl bg-[#f7f8f5] p-3"><p className="text-xs text-slate-500">目前模式</p><p className="mt-1 text-sm font-semibold text-slate-700">{activeMode.name}</p><p className="mt-1 text-xs leading-5 text-slate-500">{activeMode.description}</p></div><div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-3 text-xs"><span className="flex items-center gap-1.5 text-slate-500"><Clock3 className="size-3.5" />每日安全額度</span><span className="font-semibold text-[#196b63]">{remaining === null ? "20 題上限" : `今日剩餘 ${remaining} 題`}</span></div></section>
             <section className="rounded-[1.5rem] bg-[#e9f4f1] p-5"><p className="flex items-center gap-2 text-sm font-semibold text-[#173b4d]"><ShieldCheck className="size-4 text-[#196b63]" />可靠解題守則</p><div className="mt-4 space-y-3 text-xs leading-5 text-slate-600"><p>先確認題意；照片模糊或條件不足時，會請你補拍或補充文字。</p><p>每次回覆固定提供題意、關鍵觀念、步驟理由、驗算與易錯點。</p><p>AI 可能犯錯；重要答案請檢查步驟，或直接請教師協助。</p></div></section>
-            <section className="rounded-[1.5rem] border border-slate-200 bg-white p-5 shadow-sm"><div className="flex items-center justify-between"><div><p className="text-xs font-semibold tracking-[0.12em] text-[#196b63]">我的錯題循環</p><h2 className="mt-1 text-lg font-semibold tracking-tight text-[#173b4d]">近期學習紀錄</h2></div><Upload className="size-5 text-slate-300" /></div>{!isAuthenticated ? <p className="mt-4 text-sm leading-6 text-slate-500">登入後，這裡會整理你解過的題目、錯誤標籤與變式練習。</p> : history.isLoading ? <div className="mt-4 flex items-center gap-2 text-sm text-slate-500"><Loader2 className="size-4 animate-spin" />正在讀取紀錄…</div> : history.data?.length ? <div className="mt-4 space-y-3">{history.data.slice(0, 4).map(item => { let tags: string[] = []; try { tags = JSON.parse(item.errorTags); } catch { tags = []; } return <div key={item.id} className="rounded-xl border border-slate-100 bg-[#fcfdfc] p-3"><p className="line-clamp-2 text-xs font-medium leading-5 text-slate-700">{item.questionText}</p><div className="mt-2 flex items-center justify-between text-[11px]"><span className="text-slate-400">信心 {item.confidence}%</span><span className="text-[#196b63]">{tags[0] || "已完成"}</span></div></div>; })}<Link href="/review" className="mt-1 flex items-center gap-1 text-xs font-semibold text-[#196b63] hover:text-[#115950]">查看完整錯題本 <ArrowRight className="size-3.5" /></Link></div> : <div className="mt-4 rounded-xl bg-[#f7f8f5] p-3 text-xs leading-5 text-slate-500">第一筆解題紀錄會出現在這裡。完成後請回看變式練習，建立真正的錯題循環。</div>}</section>
+            <section className="rounded-[1.5rem] border border-slate-200 bg-white p-5 shadow-sm"><div className="flex items-center justify-between gap-3"><div><p className="text-xs font-semibold tracking-[0.12em] text-[#196b63]">我的錯題循環</p><h2 className="mt-1 text-lg font-semibold tracking-tight text-[#173b4d]">近期學習紀錄</h2></div>{isAuthenticated ? <ExportFormatMenu label="匯出" isExporting={isExportingHistory} disabled={!history.data?.length} onExport={format => void exportHistory(format)} /> : <Upload className="size-5 text-slate-300" />}</div>{!isAuthenticated ? <p className="mt-4 text-sm leading-6 text-slate-500">登入後，這裡會整理你解過的題目、錯誤標籤與變式練習。</p> : history.isLoading ? <div className="mt-4 flex items-center gap-2 text-sm text-slate-500"><Loader2 className="size-4 animate-spin" />正在讀取紀錄…</div> : history.data?.length ? <div className="mt-4 space-y-3">{history.data.slice(0, 4).map(item => { let tags: string[] = []; try { tags = JSON.parse(item.errorTags); } catch { tags = []; } return <div key={item.id} className="rounded-xl border border-slate-100 bg-[#fcfdfc] p-3"><p className="line-clamp-2 text-xs font-medium leading-5 text-slate-700">{item.questionText}</p><div className="mt-2 flex items-center justify-between text-[11px]"><span className="text-slate-400">信心 {item.confidence}%</span><span className="text-[#196b63]">{tags[0] || "已完成"}</span></div></div>; })}<Link href="/review" className="mt-1 flex items-center gap-1 text-xs font-semibold text-[#196b63] hover:text-[#115950]">查看完整錯題本 <ArrowRight className="size-3.5" /></Link></div> : <div className="mt-4 rounded-xl bg-[#f7f8f5] p-3 text-xs leading-5 text-slate-500">第一筆解題紀錄會出現在這裡。完成後請回看變式練習，建立真正的錯題循環。</div>}</section>
           </aside>
         </section>
       </main>
