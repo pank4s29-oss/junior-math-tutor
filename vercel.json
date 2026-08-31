@@ -4,7 +4,7 @@
   "outputDirectory": "public",
   "functions": {
     "server.ts": {
-      "includeFiles": "public/**",
+      "includeFiles": "{public/**,server/assets/**}",
       "maxDuration": 60
     }
   }
