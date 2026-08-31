@@ -4,7 +4,8 @@
   "outputDirectory": "public",
   "functions": {
     "server.ts": {
-      "includeFiles": "public/**"
+      "includeFiles": "public/**",
+      "maxDuration": 60
     }
   }
 }
