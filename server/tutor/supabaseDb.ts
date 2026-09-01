@@ -454,12 +454,9 @@ export async function linkPracticeQuestionAttempt(userId: string, practiceQuesti
   fail(error, "更新練習題狀態");
 }
 
-/** 刪除一筆出題紀錄；一律限定 user_id，確保學生只能刪自己的紀錄。回傳實際刪除的筆數，讓呼叫端能判斷是否找不到該筆資料。 */
 export async function deletePracticeQuestion(userId: string, practiceQuestionId: string) {
-  const { data, error } = await supabase().from("practice_questions")
-    .delete().eq("id", practiceQuestionId).eq("user_id", userId).select("id");
+  const { error } = await supabase().from("practice_questions").delete().eq("id", practiceQuestionId).eq("user_id", userId);
   fail(error, "刪除練習題");
-  return (data ?? []).length > 0;
 }
 
 export async function createEscalation(input: { userId: string; attemptId: string; reason: "wrong_answer" | "unclear_photo" | "teacher_help" | "safety_concern"; detail?: string; priority: string; notificationDelivered: boolean }) {
