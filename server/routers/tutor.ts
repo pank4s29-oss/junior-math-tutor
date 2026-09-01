@@ -235,9 +235,15 @@ export const tutorRouter = router({
           difficultyGuidance: PRACTICE_DIFFICULTY_DESCRIPTIONS[input.difficulty], teacherRules: context.rules, approvedContext: context.contents,
         }),
         prompt: `請為「${unitLabel}」出一題全新的「${PRACTICE_DIFFICULTY_LABELS[input.difficulty]}」難度練習題。`,
-        responseJsonSchema: practiceGenerationResponseFormat.json_schema.schema, maxOutputTokens: 900,
+        // 與 solve 相同給足輸出額度：思考型模型會先消耗部分輸出 token 在內部推理，
+        // 額度太低（先前為 900）容易讓最終 JSON 被截斷，解析失敗而誤判為出題失敗。
+        responseJsonSchema: practiceGenerationResponseFormat.json_schema.schema, maxOutputTokens: 3200,
       });
       generation = parsePracticeGeneration(content);
+      if (!generation.question) {
+        // 記錄模型實際回應（截斷保護），方便之後排查是被截斷、被拒答，還是欄位命名不符。
+        console.error("Practice generation returned no usable question", { grade: input.grade, unitKey: input.unitKey, difficulty: input.difficulty, contentPreview: content.slice(0, 500) });
+      }
     } catch (error) {
       await tutorDb.refundPracticeQuota(appUser.id);
       throw error;
