@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { MathText } from "@/components/MathText";
 import { trpc } from "@/lib/trpc";
 import { PRACTICE_DIFFICULTIES, PRACTICE_DIFFICULTY_DESCRIPTIONS, PRACTICE_DIFFICULTY_LABELS, type Grade, type PracticeDifficulty, type TutorMode } from "../../../shared/mathCurriculum";
 import { BookOpenCheck, Clock3, Lightbulb, Loader2, Sparkles, Wand2 } from "lucide-react";
@@ -90,9 +91,9 @@ export function PracticeGenerator({ grade, unitKey, unitLabel, isAuthenticated, 
                 <span className="rounded-full bg-white px-2 py-0.5 font-semibold ring-1 ring-[#cfe6e2]">{PRACTICE_DIFFICULTY_LABELS[latest.difficulty]}難度</span>
                 {latest.status === "sent_to_solve" && <span className="flex items-center gap-1 text-slate-400"><Clock3 className="size-3.5" />已送去解題區</span>}
               </div>
-              <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-800">{latest.questionText}</p>
-              {latest.keyConcept && <p className="mt-2 text-xs leading-5 text-slate-500">關鍵觀念：{latest.keyConcept}</p>}
-              {latest.difficultyNote && <p className="mt-1 text-xs leading-5 text-slate-400">{latest.difficultyNote}</p>}
+              <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-800"><MathText text={latest.questionText} /></p>
+              {latest.keyConcept && <p className="mt-2 text-xs leading-5 text-slate-500">關鍵觀念：<MathText text={latest.keyConcept} /></p>}
+              {latest.difficultyNote && <p className="mt-1 text-xs leading-5 text-slate-400"><MathText text={latest.difficultyNote} /></p>}
               <div className="mt-4 flex flex-wrap gap-2">
                 <Button size="sm" variant="outline" onClick={() => onPractice(latest.questionText, "guided", latest.id)} className="rounded-full border-[#a7d4cd] bg-white text-xs text-[#196b63]">
                   <Lightbulb className="mr-1.5 size-3.5" />不會寫，要提示
@@ -109,7 +110,7 @@ export function PracticeGenerator({ grade, unitKey, unitLabel, isAuthenticated, 
                 <div className="space-y-2">
                   {currentUnitQuestions.slice(1, 6).map(item => (
                     <div key={item.id} className="rounded-xl border border-slate-100 bg-[#fcfdfc] p-3">
-                      <p className="line-clamp-2 text-xs leading-5 text-slate-600">{item.questionText}</p>
+                      <p className="line-clamp-2 text-xs leading-5 text-slate-600"><MathText text={item.questionText} /></p>
                       <div className="mt-2 flex items-center justify-between text-[11px] text-slate-400">
                         <span>{PRACTICE_DIFFICULTY_LABELS[item.difficulty]}難度</span>
                         {item.status === "sent_to_solve" ? <span>已送去解題區</span> : (
