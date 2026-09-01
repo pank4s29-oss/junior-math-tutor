@@ -1,66 +1,9 @@
 import { ensureLatexRendererLoaded, renderLatexSync } from "@/lib/mathRender";
 import { Fragment, useEffect, useState } from "react";
 
-/** 比對「底數^指數」，指數可以是 {大括號包住的內容} 或單一個字元／數字（含負號）。 */
 const EXPONENT_PATTERN = /([A-Za-z0-9)\]])\^(\{[^{}]+\}|-?[A-Za-z0-9]+)/g;
 
-/**
- * MathLive 尚未載入完成（或載入失敗）時，$...$ 裡的原始 LaTeX 巨集必須先轉成
- * 看得懂的符號，不能整串原始語法印出來，例如 `\times`、`\cdot`、`\le`。這裡只
- * 覆蓋科學記號與國中常見算式會用到的巨集，且都是安全的一對一符號替換。
- */
-const LATEX_MACRO_MAP: Array<[RegExp, string]> = [
-  [/\\times/g, "×"],
-  [/\\cdot/g, "·"],
-  [/\\div/g, "÷"],
-  [/\\pm/g, "±"],
-  [/\\mp/g, "∓"],
-  [/\\leq|\\le\b/g, "≤"],
-  [/\\geq|\\ge\b/g, "≥"],
-  [/\\neq|\\ne\b/g, "≠"],
-  [/\\approx/g, "≈"],
-  [/\\infty/g, "∞"],
-  [/\\sqrt\{([^{}]+)\}/g, "√($1)"],
-  [/\\frac\{([^{}]+)\}\{([^{}]+)\}/g, "($1)/($2)"],
-  [/\\left|\\right/g, ""],
-  [/\\,|\\;|\\:|\\!/g, ""],
-  [/\\text\{([^{}]*)\}/g, "$1"],
-  // 兜底：任何沒被上面列舉到的「\巨集名{內容}」，一律拆成內容本身，避免巨集名稱
-  // （例如殘留的 \text、\mathrm 等）原封不動印給學生看，導致算式中間夾雜英文字母。
-  [/\\[a-zA-Z]+\{([^{}]*)\}/g, "$1"],
-];
-
-/** 把殘留、上面沒對到的未知巨集（`\某字串`）的反斜線去掉，避免直接把原始語法印給學生看。 */
-const UNKNOWN_MACRO_PATTERN = /\\([a-zA-Z]+)/g;
-
-/**
- * 巨集轉換必須反覆套用到「不再變化」為止：例如 `\text{\times}` 這種巨集互相包住的
- * 寫法，第一輪只會把 \text{...} 拆開變成 `\times`，要到第二輪才會被換成 ×。只跑一輪
- * 會讓部分巨集名稱（如 extext、imes 這類被截斷的殘字）直接漏到畫面上，是格式跑掉、
- * 次方符號位置跟著錯亂的主要原因。
- */
-function normalizeLooseLatexMacros(text: string) {
-  let result = text;
-  let previous: string;
-  let guard = 0;
-  do {
-    previous = result;
-    for (const [pattern, replacement] of LATEX_MACRO_MAP) result = result.replace(pattern, replacement);
-    result = result.replace(UNKNOWN_MACRO_PATTERN, "$1");
-    guard += 1;
-  } while (result !== previous && guard < 5);
-  return result;
-}
-
-/**
- * 純文字片段裡若出現「底數^指數」（不論是否有正確包進 $...$），一律強制用真正的
- * <sup> 上標渲染，確保次方數字顯示在原數字右上角，而不是被當成一般文字印在同一
- * 基線上（視覺上容易被誤認成靠右下）。已經在 $...$ 裡的 LaTeX 交給 MathLive 排版，
- * 這裡只處理漏網的純文字次方寫法，並在套用上標前先把 \times 之類的巨集轉成符號，
- * 確保 MathLive 還沒載入完成時，科學記號也能正確顯示成「a × 10 的上標 n」。
- */
-function renderPlainTextWithExponents(rawText: string, keyPrefix: string) {
-  const text = normalizeLooseLatexMacros(rawText);
+function renderPlainTextWithExponents(text: string, keyPrefix: string) {
   const nodes: React.ReactNode[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -70,17 +13,7 @@ function renderPlainTextWithExponents(rawText: string, keyPrefix: string) {
     if (match.index > lastIndex) nodes.push(<Fragment key={`${keyPrefix}-t${matchIndex}`}>{text.slice(lastIndex, match.index)}</Fragment>);
     const base = match[1];
     const exponent = match[2].startsWith("{") ? match[2].slice(1, -1) : match[2];
-    nodes.push(
-      <Fragment key={`${keyPrefix}-e${matchIndex}`}>
-        {base}
-        {/* 不依賴瀏覽器對 <sup> 的預設樣式（在中文字級／行高環境下容易被壓低，看起來
-            像下標）；直接內聯樣式強制指數固定顯示在底數右上角，讓次方與科學記號
-            不論走 MathLive 或這條純文字備援路徑都呈現一致的位置。 */}
-        <sup className="exponent-sup" style={{ verticalAlign: "super", fontSize: "0.7em", lineHeight: 0, position: "relative", top: "-0.35em" }}>
-          {exponent}
-        </sup>
-      </Fragment>,
-    );
+    nodes.push(<Fragment key={`${keyPrefix}-e${matchIndex}`}>{base}<sup>{exponent}</sup></Fragment>);
     lastIndex = match.index + match[0].length;
     matchIndex += 1;
   }
@@ -88,12 +21,6 @@ function renderPlainTextWithExponents(rawText: string, keyPrefix: string) {
   return nodes;
 }
 
-/**
- * 解題與出題系統的文字裡，數學式一律用 `$...$` 的 LaTeX 行內語法標記
- * （見 buildTutorInstructions／buildPracticeGenerationInstructions）。這個元件把
- * 這些片段實際排版成學生看得懂的數學式，而不是把 `$a \times b < 0$`
- * 這種原始語法字串原封不動印出來；`**粗體**` 則沿用既有的簡易 markdown 處理。
- */
 export function MathText({ text }: { text: string }) {
   const [, forceRerender] = useState(0);
 
@@ -101,18 +28,41 @@ export function MathText({ text }: { text: string }) {
     ensureLatexRendererLoaded(() => forceRerender(value => value + 1));
   }, []);
 
-  const parts = text.split(/(\*\*[^*]+\*\*|\$[^$\n]+\$)/g);
+  // 修正 1：擴展 Regex，支援 \n 存在於 $ 內部，且支援 $$..$$, \(..\), \[..\]
+  const parts = text.split(/(\*\*[^*]+\*\*|\$\$[\s\S]+?\$\$|\$[\s\S]+?\$|\\\([\s\S]+?\\\)|\\[[\s\S]+?\\])/g);
+
   return <>{parts.map((part, index) => {
     if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
       return <strong key={index} className="font-semibold text-slate-800">{part.slice(2, -2)}</strong>;
     }
-    if (part.startsWith("$") && part.endsWith("$") && part.length > 2) {
-      const latex = part.slice(1, -1);
+
+    // 判斷是否為捕捉到的 LaTeX 區塊
+    const isMath =
+      (part.startsWith("$") && part.endsWith("$")) ||
+      (part.startsWith("\\(") && part.endsWith("\\)")) ||
+      (part.startsWith("\\[") && part.endsWith("\\]"));
+
+    if (isMath) {
+      // 修正 2：根據不同的標記，動態剝離外層符號
+      let latex = part;
+      if (latex.startsWith("$$")) latex = latex.slice(2, -2);
+      else if (latex.startsWith("$")) latex = latex.slice(1, -1);
+      else if (latex.startsWith("\\(") || latex.startsWith("\\[")) latex = latex.slice(2, -2);
+
       const markup = renderLatexSync(latex);
       return markup
         ? <span key={index} className="math-inline mx-0.5 inline-block align-middle" dangerouslySetInnerHTML={{ __html: markup }} />
         : <span key={index} className="font-mono text-[0.92em]">{renderPlainTextWithExponents(latex, `f-${index}`)}</span>;
     }
-    return <span key={index}>{renderPlainTextWithExponents(part, `p-${index}`)}</span>;
+
+    // 修正 3：漏網純文字的防呆處理 (若 LLM 完全忘記加標記)
+    // 替換掉會引發版面錯亂的常見未轉義 LaTeX 符號
+    const safeText = part
+      .replace(/\\times/g, "×")
+      .replace(/\\div/g, "÷")
+      .replace(/\\le/g, "≤")
+      .replace(/\\ge/g, "≥");
+
+    return <span key={index}>{renderPlainTextWithExponents(safeText, `p-${index}`)}</span>;
   })}</>;
 }
