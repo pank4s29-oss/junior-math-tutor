@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { CORE_UNITS, GRADES, type Grade } from "../../shared/mathCurriculum";
-import { buildTutorInstructions, formatTutorReply, parseTutorSolution, tutorResponseFormat } from "../tutor/engine";
+import { CORE_UNITS, GRADES, PRACTICE_DIFFICULTIES, PRACTICE_DIFFICULTY_DESCRIPTIONS, PRACTICE_DIFFICULTY_LABELS, type Grade } from "../../shared/mathCurriculum";
+import { buildPracticeGenerationInstructions, buildTutorInstructions, formatTutorReply, parsePracticeGeneration, parseTutorSolution, practiceGenerationResponseFormat, tutorResponseFormat } from "../tutor/engine";
 import { buildPracticeSheetDocx, buildPracticeSheetPdf } from "../tutor/exportDocuments";
 import { GEMINI_TUTOR_MODEL, generateGeminiJson } from "../tutor/gemini";
 import * as tutorDb from "../tutor/supabaseDb";
@@ -14,6 +14,7 @@ const attachmentTypes = ["image/jpeg", "image/png", "image/webp", "application/p
 const teacherMaterialTypes = ["application/pdf", "text/plain", "text/markdown"] as const;
 const uuidSchema = z.string().uuid();
 const unitKeySchema = z.string().trim().regex(/^[a-z][a-z0-9-]{1,79}$/, "單元代碼請使用小寫英文、數字與連字號，並以英文字母開頭。");
+const practiceDifficultySchema = z.enum(PRACTICE_DIFFICULTIES);
 
 const recognitionResponseFormat = {
   type: "json_schema" as const,
@@ -210,6 +211,60 @@ export const tutorRouter = router({
     }
     return { attemptId, conversationId, responseMarkdown, solution, remaining: quota.remaining };
   }),
+
+  // 「出題」與「解題」是兩個獨立功能：這裡只請 AI 設計一道全新題目，
+  // 不會消耗 solve 的每日解題額度（見 consumePracticeQuota / consume_practice_quota）。
+  generatePractice: protectedProcedure.input(z.object({
+    grade: gradeSchema, unitKey: unitKeySchema, difficulty: practiceDifficultySchema,
+  })).mutation(async ({ ctx, input }) => {
+    const appUser = await tutorDb.getOrCreateAppUser(ctx.user);
+    const isCoreUnit = CORE_UNITS[input.grade].some(unit => unit.key === input.unitKey);
+    const approvedCustomUnit = isCoreUnit ? undefined : await supabaseTeacherDb.getApprovedStudentUnit(input.grade, input.unitKey);
+    if (!isCoreUnit && !approvedCustomUnit) throw new TRPCError({ code: "BAD_REQUEST", message: "此自訂單元尚未核准或已不存在，請重新選擇單元。" });
+    const quota = await tutorDb.consumePracticeQuota(appUser.id);
+    if (!quota.allowed) throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: quota.message });
+
+    let unitLabel = approvedCustomUnit?.label ?? resolveUnitLabel(input.grade, input.unitKey);
+    let generation: ReturnType<typeof parsePracticeGeneration>;
+    try {
+      const context = await supabaseTeacherDb.getTutorContext(input.grade, input.unitKey);
+      unitLabel = approvedCustomUnit?.label ?? context.name ?? unitLabel;
+      const content = await generateGeminiJson({
+        instruction: buildPracticeGenerationInstructions({
+          grade: input.grade, unitLabel, difficultyLabel: PRACTICE_DIFFICULTY_LABELS[input.difficulty],
+          difficultyGuidance: PRACTICE_DIFFICULTY_DESCRIPTIONS[input.difficulty], teacherRules: context.rules, approvedContext: context.contents,
+        }),
+        prompt: `請為「${unitLabel}」出一題全新的「${PRACTICE_DIFFICULTY_LABELS[input.difficulty]}」難度練習題。`,
+        responseJsonSchema: practiceGenerationResponseFormat.json_schema.schema, maxOutputTokens: 900,
+      });
+      generation = parsePracticeGeneration(content);
+    } catch (error) {
+      await tutorDb.refundPracticeQuota(appUser.id);
+      throw error;
+    }
+    if (!generation.question) {
+      await tutorDb.refundPracticeQuota(appUser.id);
+      throw new TRPCError({ code: "BAD_GATEWAY", message: "出題服務暫時無法完成，請稍後再試一次。" });
+    }
+    const saved = await tutorDb.createPracticeQuestion({
+      userId: appUser.id, grade: input.grade, unitKey: input.unitKey, unitLabel, difficulty: input.difficulty,
+      questionText: generation.question, keyConcept: generation.keyConcept, difficultyNote: generation.difficultyNote, model: GEMINI_TUTOR_MODEL,
+    });
+    return { practiceQuestionId: saved.id, question: generation.question, keyConcept: generation.keyConcept, difficultyNote: generation.difficultyNote, remaining: quota.remaining };
+  }),
+
+  listPracticeQuestions: protectedProcedure.query(async ({ ctx }) => {
+    const appUser = await tutorDb.getOrCreateAppUser(ctx.user);
+    return tutorDb.listPracticeQuestions(appUser.id);
+  }),
+
+  linkPracticeQuestionAttempt: protectedProcedure.input(z.object({ practiceQuestionId: uuidSchema, attemptId: uuidSchema }))
+    .mutation(async ({ ctx, input }) => {
+      const appUser = await tutorDb.getOrCreateAppUser(ctx.user);
+      if (!await tutorDb.getAttemptForUser(appUser.id, input.attemptId)) throw new TRPCError({ code: "NOT_FOUND", message: "找不到這筆解題紀錄。" });
+      await tutorDb.linkPracticeQuestionAttempt(appUser.id, input.practiceQuestionId, input.attemptId);
+      return { success: true as const };
+    }),
 
   listAttachments: protectedProcedure.query(async ({ ctx }) => {
     const appUser = await tutorDb.getOrCreateAppUser(ctx.user);
