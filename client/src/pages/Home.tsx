@@ -394,7 +394,6 @@ export default function Home() {
                   isLoading={solve.isPending || uploadPhoto.isPending}
                   suggestedPrompts={suggestedPromptsForUnit(grade, unit.key, unit.label)}
                   batchMaxQuestions={maxBatchQuestions}
-                  onGoToPracticeGenerator={() => setActiveTab("practice")}
                 />
 
                 {lastAttempt && (lastAttempt.id ? (
