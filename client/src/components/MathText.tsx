@@ -5,12 +5,46 @@ import { Fragment, useEffect, useState } from "react";
 const EXPONENT_PATTERN = /([A-Za-z0-9)\]])\^(\{[^{}]+\}|-?[A-Za-z0-9]+)/g;
 
 /**
+ * MathLive 尚未載入完成（或載入失敗）時，$...$ 裡的原始 LaTeX 巨集必須先轉成
+ * 看得懂的符號，不能整串原始語法印出來，例如 `\times`、`\cdot`、`\le`。這裡只
+ * 覆蓋科學記號與國中常見算式會用到的巨集，且都是安全的一對一符號替換。
+ */
+const LATEX_MACRO_MAP: Array<[RegExp, string]> = [
+  [/\\times/g, "×"],
+  [/\\cdot/g, "·"],
+  [/\\div/g, "÷"],
+  [/\\pm/g, "±"],
+  [/\\mp/g, "∓"],
+  [/\\leq|\\le\b/g, "≤"],
+  [/\\geq|\\ge\b/g, "≥"],
+  [/\\neq|\\ne\b/g, "≠"],
+  [/\\approx/g, "≈"],
+  [/\\infty/g, "∞"],
+  [/\\sqrt\{([^{}]+)\}/g, "√($1)"],
+  [/\\frac\{([^{}]+)\}\{([^{}]+)\}/g, "($1)/($2)"],
+  [/\\left|\\right/g, ""],
+  [/\\,|\\;|\\:|\\!/g, ""],
+  [/\\text\{([^{}]*)\}/g, "$1"],
+];
+
+/** 把殘留、上面沒對到的未知巨集（`\某字串`）的反斜線去掉，避免直接把原始語法印給學生看。 */
+const UNKNOWN_MACRO_PATTERN = /\\([a-zA-Z]+)/g;
+
+function normalizeLooseLatexMacros(text: string) {
+  let result = text;
+  for (const [pattern, replacement] of LATEX_MACRO_MAP) result = result.replace(pattern, replacement);
+  return result.replace(UNKNOWN_MACRO_PATTERN, "$1");
+}
+
+/**
  * 純文字片段裡若出現「底數^指數」（不論是否有正確包進 $...$），一律強制用真正的
  * <sup> 上標渲染，確保次方數字顯示在原數字右上角，而不是被當成一般文字印在同一
  * 基線上（視覺上容易被誤認成靠右下）。已經在 $...$ 裡的 LaTeX 交給 MathLive 排版，
- * 這裡只處理漏網的純文字次方寫法。
+ * 這裡只處理漏網的純文字次方寫法，並在套用上標前先把 \times 之類的巨集轉成符號，
+ * 確保 MathLive 還沒載入完成時，科學記號也能正確顯示成「a × 10 的上標 n」。
  */
-function renderPlainTextWithExponents(text: string, keyPrefix: string) {
+function renderPlainTextWithExponents(rawText: string, keyPrefix: string) {
+  const text = normalizeLooseLatexMacros(rawText);
   const nodes: React.ReactNode[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
