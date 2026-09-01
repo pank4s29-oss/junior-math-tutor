@@ -1,8 +1,15 @@
 import { ensureLatexRendererLoaded, renderLatexSync } from "@/lib/mathRender";
 import { Fragment, useEffect, useState } from "react";
 
+/** 比對「底數^指數」，指數可以是 {大括號包住的內容} 或單一個字元／數字（含負號）。 */
 const EXPONENT_PATTERN = /([A-Za-z0-9)\]])\^(\{[^{}]+\}|-?[A-Za-z0-9]+)/g;
 
+/**
+ * 純文字片段裡若出現「底數^指數」（不論是否有正確包進 $...$），一律強制用真正的
+ * <sup> 上標渲染，確保次方數字顯示在原數字右上角，而不是被當成一般文字印在同一
+ * 基線上（視覺上容易被誤認成靠右下）。已經在 $...$ 裡的 LaTeX 交給 MathLive 排版，
+ * 這裡只處理漏網的純文字次方寫法。
+ */
 function renderPlainTextWithExponents(text: string, keyPrefix: string) {
   const nodes: React.ReactNode[] = [];
   let lastIndex = 0;
@@ -21,6 +28,12 @@ function renderPlainTextWithExponents(text: string, keyPrefix: string) {
   return nodes;
 }
 
+/**
+ * 解題與出題系統的文字裡，數學式一律用 `$...$` 的 LaTeX 行內語法標記
+ * （見 buildTutorInstructions／buildPracticeGenerationInstructions）。這個元件把
+ * 這些片段實際排版成學生看得懂的數學式，而不是把 `$a \times b < 0$`
+ * 這種原始語法字串原封不動印出來；`**粗體**` 則沿用既有的簡易 markdown 處理。
+ */
 export function MathText({ text }: { text: string }) {
   const [, forceRerender] = useState(0);
 
@@ -28,48 +41,18 @@ export function MathText({ text }: { text: string }) {
     ensureLatexRendererLoaded(() => forceRerender(value => value + 1));
   }, []);
 
-  // 修正 1：限制捕捉範圍，禁止 Regex 跨越連續兩個換行符號 (即段落)，避免 AI 漏打 $ 時將一整大段文字當成數學式
-  const parts = text.split(/(\*\*[^*]+\*\*|\$\$(?:(?!\n\s*\n)[\s\S])+?\$\$|\$(?:(?!\n\s*\n)[\s\S])+?\$|\\\((?:(?!\n\s*\n)[\s\S])+?\\\)|\\[(?:(?!\n\s*\n)[\s\S])+?\\])/g);
-
+  const parts = text.split(/(\*\*[^*]+\*\*|\$[^$\n]+\$)/g);
   return <>{parts.map((part, index) => {
-    if (!part) return null;
-
     if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
       return <strong key={index} className="font-semibold text-slate-800">{part.slice(2, -2)}</strong>;
     }
-
-    const isMath =
-      (part.startsWith("$") && part.endsWith("$")) ||
-      (part.startsWith("\\(") && part.endsWith("\\)")) ||
-      (part.startsWith("\\[") && part.endsWith("\\]"));
-
-    if (isMath) {
-      let latex = part;
-      if (latex.startsWith("$$")) latex = latex.slice(2, -2);
-      else if (latex.startsWith("$")) latex = latex.slice(1, -1);
-      else if (latex.startsWith("\\(") || latex.startsWith("\\[")) latex = latex.slice(2, -2);
-
+    if (part.startsWith("$") && part.endsWith("$") && part.length > 2) {
+      const latex = part.slice(1, -1);
       const markup = renderLatexSync(latex);
-      if (markup) {
-        return <span key={index} className="math-inline mx-0.5 inline-block align-middle" dangerouslySetInnerHTML={{ __html: markup }} />;
-      } else {
-        // 修正 2：當 LaTeX 解析失敗退回純文字時，強制拔除實體換行符號，避免 AI 產生的壞掉語法撐破垂直版面
-        const cleanLatex = latex
-          .replace(/[\r\n]+/g, " ") 
-          .replace(/\\times/g, "×")
-          .replace(/\\div/g, "÷")
-          .replace(/\\le/g, "≤")
-          .replace(/\\ge/g, "≥");
-        return <span key={index} className="font-mono text-[0.92em] text-gray-600">{renderPlainTextWithExponents(cleanLatex, `f-${index}`)}</span>;
-      }
+      return markup
+        ? <span key={index} className="math-inline mx-0.5 inline-block align-middle" dangerouslySetInnerHTML={{ __html: markup }} />
+        : <span key={index} className="font-mono text-[0.92em]">{renderPlainTextWithExponents(latex, `f-${index}`)}</span>;
     }
-
-    const safeText = part
-      .replace(/\\times/g, "×")
-      .replace(/\\div/g, "÷")
-      .replace(/\\le/g, "≤")
-      .replace(/\\ge/g, "≥");
-
-    return <span key={index}>{renderPlainTextWithExponents(safeText, `p-${index}`)}</span>;
+    return <span key={index}>{renderPlainTextWithExponents(part, `p-${index}`)}</span>;
   })}</>;
 }
