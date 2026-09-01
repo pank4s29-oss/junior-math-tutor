@@ -70,6 +70,24 @@ async function callRefundRpc(userId: string) {
   return Boolean((data as { refunded?: boolean } | null)?.refunded);
 }
 
+const PRACTICE_DAILY_LIMIT = 30;
+
+/** 練習題生成的每日額度計次，與 consumeSolveQuota 各自獨立計數，出題不會排擠解題額度。 */
+export async function consumePracticeQuota(userId: string) {
+  const { data, error } = await supabase().rpc("consume_practice_quota", { p_user_id: userId, p_daily_limit: PRACTICE_DAILY_LIMIT, p_cooldown_seconds: 3 });
+  fail(error, "檢查出題額度");
+  return data as { allowed: boolean; remaining: number; message?: string };
+}
+
+/** 僅在已通過本次出題額度檢查、但模型未能成功產生題目時退還一次計次。 */
+export async function refundPracticeQuota(userId: string) {
+  try {
+    await supabase().rpc("refund_practice_quota", { p_user_id: userId });
+  } catch (error) {
+    console.error("Failed to refund practice generation quota", { message: error instanceof Error ? error.message : "unknown error" });
+  }
+}
+
 /**
  * 失敗時重試一次；若仍失敗，寫入 tutor_quota_refund_failures 供教師工作台追蹤與人工核帳，
  * 避免像先前只印 console.error，重啟或未接 log 平台時學生額度悄悄減少卻無人知曉。
@@ -401,6 +419,39 @@ export async function listPracticeHistory(userId: string) {
     id: String(row.id), sourceAttemptId: String(row.source_attempt_id), question: row.question,
     studentAnswer: row.student_answer, status: row.status, createdAt: row.created_at,
   }));
+}
+
+export async function createPracticeQuestion(input: {
+  userId: string; grade: Grade; unitKey: string; unitLabel: string; difficulty: "intro" | "standard" | "challenge";
+  questionText: string; keyConcept: string; difficultyNote: string; model: string;
+}) {
+  const { data, error } = await supabase().from("practice_questions").insert({
+    user_id: input.userId, grade: input.grade, unit_key: input.unitKey, unit_label: input.unitLabel,
+    difficulty: input.difficulty, question_text: input.questionText, key_concept: input.keyConcept,
+    difficulty_note: input.difficultyNote, model: input.model,
+  }).select("id, created_at").single();
+  fail(error, "保存練習題");
+  return { id: String(data.id), createdAt: String(data.created_at) };
+}
+
+export async function listPracticeQuestions(userId: string) {
+  const { data, error } = await supabase().from("practice_questions")
+    .select("id, grade, unit_key, unit_label, difficulty, question_text, key_concept, difficulty_note, status, linked_attempt_id, created_at")
+    .eq("user_id", userId).order("created_at", { ascending: false }).limit(20);
+  fail(error, "讀取練習題紀錄");
+  return (data ?? []).map((row: any) => ({
+    id: String(row.id), grade: row.grade as Grade, unitKey: String(row.unit_key), unitLabel: String(row.unit_label),
+    difficulty: row.difficulty as "intro" | "standard" | "challenge", questionText: row.question_text,
+    keyConcept: row.key_concept, difficultyNote: row.difficulty_note, status: row.status as "generated" | "sent_to_solve",
+    linkedAttemptId: row.linked_attempt_id ? String(row.linked_attempt_id) : null, createdAt: row.created_at,
+  }));
+}
+
+export async function linkPracticeQuestionAttempt(userId: string, practiceQuestionId: string, attemptId: string) {
+  const { error } = await supabase().from("practice_questions")
+    .update({ status: "sent_to_solve", linked_attempt_id: attemptId, updated_at: new Date().toISOString() })
+    .eq("id", practiceQuestionId).eq("user_id", userId);
+  fail(error, "更新練習題狀態");
 }
 
 export async function createEscalation(input: { userId: string; attemptId: string; reason: "wrong_answer" | "unclear_photo" | "teacher_help" | "safety_concern"; detail?: string; priority: string; notificationDelivered: boolean }) {
