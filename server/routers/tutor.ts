@@ -245,15 +245,15 @@ export const tutorRouter = router({
       });
       const prompt = `請為「${unitLabel}」出一題全新的「${PRACTICE_DIFFICULTY_LABELS[input.difficulty]}」難度練習題。`;
 
-      // 最多嘗試兩次：模型偶爾會把思考草稿或沒收尾的 LaTeX 直接寫進欄位內容
-      // （例如「Wait, let's fix LaTeX in question.」），與其把這種內容送給學生看，
-      // 不如自動重打一次；兩次都失敗才視為真的出題失敗。
-      for (let attempt = 1; attempt <= 2; attempt += 1) {
+      // 最多嘗試三次：模型偶爾會把思考草稿、沒收尾的 LaTeX，或運算符號被吃掉的殘缺敘述
+      // （例如「Wait, let's fix LaTeX in question.」、「1AB 的結果」）直接寫進欄位內容，
+      // 與其把這種內容送給學生看，不如自動重打；三次都失敗才視為真的出題失敗。
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
         const content = await generateGeminiJson({
           instruction, prompt,
           // 思考型模型會先消耗部分輸出 token 在內部推理／草稿，額度太低容易讓最終
           // JSON 被截斷、或逼得模型把草稿直接留在字串欄位裡，所以給足夠寬裕的額度。
-          responseJsonSchema: practiceGenerationResponseFormat.json_schema.schema, maxOutputTokens: 4096,
+          responseJsonSchema: practiceGenerationResponseFormat.json_schema.schema, maxOutputTokens: 6000,
         });
         const parsed = parsePracticeGeneration(content);
         const isClean = Boolean(parsed.question)
