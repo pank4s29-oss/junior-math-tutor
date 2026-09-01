@@ -272,6 +272,15 @@ export const tutorRouter = router({
       return { success: true as const };
     }),
 
+  // 讓學生可以清掉不想練習的出題紀錄；一律以 appUser.id 限定範圍，避免刪到別人的紀錄。
+  deletePracticeQuestion: protectedProcedure.input(z.object({ practiceQuestionId: uuidSchema }))
+    .mutation(async ({ ctx, input }) => {
+      const appUser = await tutorDb.getOrCreateAppUser(ctx.user);
+      const deleted = await tutorDb.deletePracticeQuestion(appUser.id, input.practiceQuestionId);
+      if (!deleted) throw new TRPCError({ code: "NOT_FOUND", message: "找不到這筆出題紀錄，可能已經被刪除。" });
+      return { success: true as const };
+    }),
+
   listAttachments: protectedProcedure.query(async ({ ctx }) => {
     const appUser = await tutorDb.getOrCreateAppUser(ctx.user);
     return tutorDb.listAttachmentsForUser(appUser.id);
