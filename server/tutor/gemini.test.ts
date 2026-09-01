@@ -9,7 +9,7 @@ vi.mock("@google/genai", () => ({
   GoogleGenAI: mocks.GoogleGenAI,
 }));
 
-import { GEMINI_TUTOR_MODEL, generateGeminiJson } from "./gemini";
+import { GEMINI_TUTOR_MODEL, generateGeminiJson, repairBrokenJsonEscapes } from "./gemini";
 
 describe("Gemini 結構化數學解題相容層", () => {
   beforeEach(() => {
@@ -61,5 +61,50 @@ describe("Gemini 結構化數學解題相容層", () => {
       responseJsonSchema: { type: "object" },
       maxOutputTokens: 400,
     })).rejects.toThrow("約 10 秒後再試");
+  });
+
+  it("修正 Gemini 把 LaTeX 巨集反斜線寫成單一反斜線、被 JSON 逃脫規則吃成控制字元的殘缺巨集（\\times、\\frac、\\text、\\right）", async () => {
+    // 模擬 Gemini 實際送回的、反斜線沒有正確雙寫的原始 JSON 文字：
+    // \times、\frac、\text 的反斜線 + 開頭字母會被 JSON.parse 當成 \t/\f 等逃脫序列吃掉，
+    // 留下 imes、rac、ext 這類殘缺巨集名稱直接印給學生看。
+    const brokenWireJson = '{"question":"$8\\times10^7$ 與 $\\frac{1}{2}$ 且 $\\text{}$，$2\\right)$"}';
+    mocks.generateContent.mockResolvedValue({ text: brokenWireJson });
+
+    const content = await generateGeminiJson({
+      instruction: "只輸出 JSON。", prompt: "出一題。", responseJsonSchema: { type: "object" }, maxOutputTokens: 400,
+    });
+    const parsed = JSON.parse(content) as { question: string };
+
+    expect(parsed.question).toContain("\\times");
+    expect(parsed.question).toContain("\\frac{1}{2}");
+    expect(parsed.question).toContain("\\text{}");
+    expect(parsed.question).toContain("\\right)");
+    // 巨集名稱前面一定要接著反斜線；沒有反斜線的殘缺巨集名稱（times 被吃成 imes、
+    // frac 被吃成 rac、text 被吃成 ext）代表修正失敗，不能出現在最終文字裡。
+    expect(parsed.question).not.toMatch(/[^\\t]imes/);
+    expect(parsed.question).not.toMatch(/[^\\f]rac\{/);
+    expect(parsed.question).not.toMatch(/[^\\t]ext\{/);
+  });
+
+  it("正確保留原本就是換行用途的 \\n，不誤判成 LaTeX 巨集殘字", async () => {
+    mocks.generateContent.mockResolvedValue({ text: '{"work":"第一行\\n第二行"}' });
+    const content = await generateGeminiJson({
+      instruction: "只輸出 JSON。", prompt: "解一題。", responseJsonSchema: { type: "object" }, maxOutputTokens: 400,
+    });
+    const parsed = JSON.parse(content) as { work: string };
+    expect(parsed.work).toBe("第一行\n第二行");
+  });
+});
+
+describe("repairBrokenJsonEscapes", () => {
+  it("把後面接英文字母的 \\t / \\f / \\b 一律視為誤判的 LaTeX 巨集殘字並修正", () => {
+    expect(JSON.parse(repairBrokenJsonEscapes('"\\times"'))).toBe("\\times");
+    expect(JSON.parse(repairBrokenJsonEscapes('"\\frac{1}{2}"'))).toBe("\\frac{1}{2}");
+    expect(JSON.parse(repairBrokenJsonEscapes('"\\text{ok}"'))).toBe("\\text{ok}");
+  });
+
+  it("只在 \\r / \\n 後面接已知 LaTeX 巨集殘字時才修正，避免誤傷真正的換行", () => {
+    expect(JSON.parse(repairBrokenJsonEscapes('"\\right)"'))).toBe("\\right)");
+    expect(JSON.parse(repairBrokenJsonEscapes('"a\\nb"'))).toBe("a\nb");
   });
 });
