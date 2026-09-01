@@ -28,35 +28,42 @@ export function MathText({ text }: { text: string }) {
     ensureLatexRendererLoaded(() => forceRerender(value => value + 1));
   }, []);
 
-  // 修正 1：擴展 Regex，支援 \n 存在於 $ 內部，且支援 $$..$$, \(..\), \[..\]
-  const parts = text.split(/(\*\*[^*]+\*\*|\$\$[\s\S]+?\$\$|\$[\s\S]+?\$|\\\([\s\S]+?\\\)|\\[[\s\S]+?\\])/g);
+  // 修正 1：限制捕捉範圍，禁止 Regex 跨越連續兩個換行符號 (即段落)，避免 AI 漏打 $ 時將一整大段文字當成數學式
+  const parts = text.split(/(\*\*[^*]+\*\*|\$\$(?:(?!\n\s*\n)[\s\S])+?\$\$|\$(?:(?!\n\s*\n)[\s\S])+?\$|\\\((?:(?!\n\s*\n)[\s\S])+?\\\)|\\[(?:(?!\n\s*\n)[\s\S])+?\\])/g);
 
   return <>{parts.map((part, index) => {
+    if (!part) return null;
+
     if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
       return <strong key={index} className="font-semibold text-slate-800">{part.slice(2, -2)}</strong>;
     }
 
-    // 判斷是否為捕捉到的 LaTeX 區塊
     const isMath =
       (part.startsWith("$") && part.endsWith("$")) ||
       (part.startsWith("\\(") && part.endsWith("\\)")) ||
       (part.startsWith("\\[") && part.endsWith("\\]"));
 
     if (isMath) {
-      // 修正 2：根據不同的標記，動態剝離外層符號
       let latex = part;
       if (latex.startsWith("$$")) latex = latex.slice(2, -2);
       else if (latex.startsWith("$")) latex = latex.slice(1, -1);
       else if (latex.startsWith("\\(") || latex.startsWith("\\[")) latex = latex.slice(2, -2);
 
       const markup = renderLatexSync(latex);
-      return markup
-        ? <span key={index} className="math-inline mx-0.5 inline-block align-middle" dangerouslySetInnerHTML={{ __html: markup }} />
-        : <span key={index} className="font-mono text-[0.92em]">{renderPlainTextWithExponents(latex, `f-${index}`)}</span>;
+      if (markup) {
+        return <span key={index} className="math-inline mx-0.5 inline-block align-middle" dangerouslySetInnerHTML={{ __html: markup }} />;
+      } else {
+        // 修正 2：當 LaTeX 解析失敗退回純文字時，強制拔除實體換行符號，避免 AI 產生的壞掉語法撐破垂直版面
+        const cleanLatex = latex
+          .replace(/[\r\n]+/g, " ") 
+          .replace(/\\times/g, "×")
+          .replace(/\\div/g, "÷")
+          .replace(/\\le/g, "≤")
+          .replace(/\\ge/g, "≥");
+        return <span key={index} className="font-mono text-[0.92em] text-gray-600">{renderPlainTextWithExponents(cleanLatex, `f-${index}`)}</span>;
+      }
     }
 
-    // 修正 3：漏網純文字的防呆處理 (若 LLM 完全忘記加標記)
-    // 替換掉會引發版面錯亂的常見未轉義 LaTeX 符號
     const safeText = part
       .replace(/\\times/g, "×")
       .replace(/\\div/g, "÷")
