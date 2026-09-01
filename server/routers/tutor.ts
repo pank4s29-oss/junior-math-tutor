@@ -291,6 +291,12 @@ export const tutorRouter = router({
       return { success: true as const };
     }),
 
+  deletePracticeQuestion: protectedProcedure.input(z.object({ practiceQuestionId: uuidSchema })).mutation(async ({ ctx, input }) => {
+    const appUser = await tutorDb.getOrCreateAppUser(ctx.user);
+    await tutorDb.deletePracticeQuestion(appUser.id, input.practiceQuestionId);
+    return { success: true as const };
+  }),
+
   listAttachments: protectedProcedure.query(async ({ ctx }) => {
     const appUser = await tutorDb.getOrCreateAppUser(ctx.user);
     return tutorDb.listAttachmentsForUser(appUser.id);
