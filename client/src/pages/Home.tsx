@@ -3,12 +3,13 @@ import { AIChatBox, type Message, type PhotoQuality } from "@/components/AIChatB
 import { AttachmentHistoryPanel, type AttachmentHistoryItem } from "@/components/AttachmentHistoryPanel";
 import { AuthDialogNext } from "@/components/AuthDialogNext";
 import { ExportFormatMenu } from "@/components/ExportFormatMenu";
+import { PracticeGenerator } from "@/components/PracticeGenerator";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { downloadBase64File } from "@/lib/downloadBase64File";
 import { trpc } from "@/lib/trpc";
 import { CORE_UNITS, DEFAULT_TUTOR_MODES, GRADE_LABELS, type Grade, type TutorMode } from "../../../shared/mathCurriculum";
-import { AlertCircle, ArrowRight, BadgeCheck, BookOpenCheck, CheckCircle2, CircleHelp, Clock3, FileWarning, GraduationCap, Lightbulb, Loader2, LogOut, NotebookPen, ShieldCheck, Sparkles, Tag, Upload, UserRoundCheck } from "lucide-react";
+import { AlertCircle, ArrowRight, BadgeCheck, BookOpenCheck, CheckCircle2, CircleHelp, Clock3, FileWarning, GraduationCap, Lightbulb, Loader2, LogOut, MessageCircleQuestion, NotebookPen, ShieldCheck, Sparkles, Tag, Upload, UserRoundCheck, Wand2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Link } from "wouter";
@@ -29,7 +30,10 @@ function suggestedPromptsForUnit(grade: Grade, unitKey: string, unitLabel: strin
     "roots-pythagorean": ["直角三角形兩股為 6、8，請引導我求斜邊", "請檢查我化簡 √72 的過程"],
     probability: ["擲兩顆骰子和為 7 的機率怎麼算？先提示", "用樹狀圖解釋兩次抽球的機率"],
   };
-  return examples[unitKey] ?? [`我正在學「${unitLabel}」，請先給我一題入門提示`, `請用「${unitLabel}」幫我檢查這個解題步驟`];
+  // 沒有精選範例的單元不再塞入「請給我一題入門提示」這類假可解的按鈕——
+  // 那句話本身沒有題目可解，只會讓 AI 反過來跟學生要題目。改由 AIChatBox 的
+  // onGoToPracticeGenerator 導向真正能出題的「練習題生成」區塊。
+  return examples[unitKey] ?? [];
 }
 
 function prepareHandwrittenPhoto(file: File) {
@@ -91,6 +95,7 @@ function readFileAsDataUrl(file: File) {
 
 export default function Home() {
   const { user, loading, isAuthenticated, logout } = useAuth();
+  const [activeTab, setActiveTab] = useState<"solve" | "practice">("solve");
   const [grade, setGrade] = useState<Grade>("seven");
   const [unitKey, setUnitKey] = useState(CORE_UNITS.seven[0].key);
   const [mode, setMode] = useState<TutorMode>("guided");
@@ -126,6 +131,7 @@ export default function Home() {
   const maxBatchQuestions = batchSettings.data?.maxBatchQuestions ?? 5;
   const reportConcern = trpc.tutor.reportConcern.useMutation();
   const savePractice = trpc.tutor.savePractice.useMutation();
+  const linkPracticeQuestionAttempt = trpc.tutor.linkPracticeQuestionAttempt.useMutation();
   const markMistake = trpc.tutor.markMistake.useMutation({
     onSuccess: () => { toast.success("已把這題標記為常犯錯題；可到錯題循環建立二次練習。", { icon: <Tag className="size-4" /> }); void history.refetch(); },
     onError: error => toast.error(error.message || "暫時無法標記錯題，請稍後再試。"),
@@ -226,7 +232,7 @@ export default function Home() {
     }
   };
 
-  const sendQuestion = async (question: string) => {
+  const sendQuestion = async (question: string, practiceQuestionId?: string) => {
     if (!isAuthenticated) {
       toast.message("請先登入，再開始保存你的解題與錯題紀錄。");
       setAuthDialogOpen(true);
@@ -252,6 +258,9 @@ export default function Home() {
       setLastAttempt({ id: result.attemptId, variationQuestion: result.solution.variationQuestion, confidence: result.solution.confidence, needsClarification: result.solution.needsClarification });
       setRemaining(result.remaining);
       void utils.tutor.listAttachments.invalidate();
+      if (practiceQuestionId && result.attemptId) {
+        linkPracticeQuestionAttempt.mutate({ practiceQuestionId, attemptId: result.attemptId }, { onSuccess: () => void utils.tutor.listPracticeQuestions.invalidate() });
+      }
       if (selectedHistoryAttachment) {
         // 保持選取狀態，讓學生可以直接針對同一張圖片繼續追問下一題（例如第 13 題）。
       } else {
@@ -281,6 +290,12 @@ export default function Home() {
             ? `## 解題服務暫時繁忙\n${message}\n\n> 這不是題目清晰度問題。請依提示稍候後重試；題目檔案仍保留在佇列中。`
           : "## 暫時無法可靠作答\n我現在無法完成這題的安全檢查。請稍候再試，或改為補上清楚題目與你的作答步驟。\n\n> AI 可能出錯；重要答案請與教師或可驗算步驟交叉確認。" }]);
     }
+  };
+
+  const handlePracticeToSolve = (question: string, practiceMode: TutorMode, practiceQuestionId: string) => {
+    setMode(practiceMode);
+    setActiveTab("solve");
+    void sendQuestion(question, practiceQuestionId);
   };
 
   const report = async (reason: "wrong_answer" | "teacher_help" | "unclear_photo") => {
@@ -334,6 +349,11 @@ export default function Home() {
               <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between"><div><p className="mb-2 text-xs font-medium tracking-[0.18em] text-[#f8cf88]">YOUR THINKING, STEP BY STEP</p><h1 className="font-serif text-3xl tracking-tight sm:text-4xl">先理解，再解出來。</h1><p className="mt-3 max-w-xl text-sm leading-6 text-slate-200">依照你的程度與選擇的學習模式，整理題意、關鍵觀念、每一步理由、驗算與易錯點。</p></div><div className="flex items-center gap-2 rounded-2xl bg-white/10 px-3 py-2 text-xs text-slate-100"><ShieldCheck className="size-4 text-[#8ed6ca]" />品牌託管模型・學生不需 API Key</div></div>
             </div>
 
+            <div role="tablist" aria-label="功能切換" className="mb-5 grid grid-cols-2 gap-2 rounded-[1.25rem] bg-[#ece9e2] p-1.5">
+              <button role="tab" aria-selected={activeTab === "solve"} onClick={() => setActiveTab("solve")} className={`flex items-center justify-center gap-2 rounded-2xl px-4 py-2.5 text-sm font-semibold transition ${activeTab === "solve" ? "bg-white text-[#173b4d] shadow-sm" : "text-slate-500 hover:text-slate-700"}`}><MessageCircleQuestion className="size-4" />幫我解題</button>
+              <button role="tab" aria-selected={activeTab === "practice"} onClick={() => setActiveTab("practice")} className={`flex items-center justify-center gap-2 rounded-2xl px-4 py-2.5 text-sm font-semibold transition ${activeTab === "practice" ? "bg-white text-[#173b4d] shadow-sm" : "text-slate-500 hover:text-slate-700"}`}><Wand2 className="size-4" />練習題生成</button>
+            </div>
+
             <section aria-label="學習設定" className="mb-5 rounded-[1.5rem] border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
               <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-semibold tracking-[0.12em] text-[#196b63]">01　設定今天的學習範圍</p><p className="mt-1 text-sm text-slate-500">選擇年級與單元，讓我使用合適的教學規則。</p></div><div className="flex items-center gap-2 text-xs text-slate-500"><BadgeCheck className="size-4 text-[#196b63]" />教師核准內容優先</div></div>
               <div className="mt-4 flex gap-2 overflow-x-auto pb-1">{(["seven", "eight", "nine"] as Grade[]).map(item => <button key={item} onClick={() => switchGrade(item)} className={`shrink-0 rounded-full px-4 py-2 text-sm font-medium transition ${grade === item ? "bg-[#196b63] text-white shadow-sm" : "bg-[#f2f5f4] text-slate-600 hover:bg-[#e4efed]"}`}>{GRADE_LABELS[item]}</button>)}</div>
@@ -342,48 +362,62 @@ export default function Home() {
               {isAuthenticated && curriculum.isError && <p className="mt-3 text-xs text-[#9a5b21]">暫時無法同步自訂單元；目前顯示核心課綱。</p>}
             </section>
 
-            <section aria-label="解題模式" className="mb-5 flex gap-2 overflow-x-auto pb-1 sm:grid sm:grid-cols-3 sm:overflow-visible">{studentModes.map(item => { const Icon = modeIcon(item.key); const selected = mode === item.key; return <button key={item.key} onClick={() => setMode(item.key)} className={`w-[15rem] shrink-0 rounded-2xl border p-4 text-left transition sm:w-auto ${selected ? "border-[#196b63] bg-[#eaf6f3] shadow-[0_12px_25px_-20px_rgba(25,107,99,0.7)]" : "border-slate-200 bg-white hover:border-[#a7d4cd] hover:bg-[#fcfefd]"}`}><div className="flex items-center gap-2"><div className={`flex size-8 items-center justify-center rounded-xl ${selected ? "bg-[#196b63] text-white" : "bg-slate-100 text-slate-500"}`}><Icon className="size-4" /></div><span className="text-sm font-semibold text-slate-800">{item.name}</span></div><p className="mt-2 text-xs leading-5 text-slate-500">{item.description}</p></button>; })}</section>
+            {activeTab === "solve" ? (
+              <>
+                <section aria-label="解題模式" className="mb-5 flex gap-2 overflow-x-auto pb-1 sm:grid sm:grid-cols-3 sm:overflow-visible">{studentModes.map(item => { const Icon = modeIcon(item.key); const selected = mode === item.key; return <button key={item.key} onClick={() => setMode(item.key)} className={`w-[15rem] shrink-0 rounded-2xl border p-4 text-left transition sm:w-auto ${selected ? "border-[#196b63] bg-[#eaf6f3] shadow-[0_12px_25px_-20px_rgba(25,107,99,0.7)]" : "border-slate-200 bg-white hover:border-[#a7d4cd] hover:bg-[#fcfefd]"}`}><div className="flex items-center gap-2"><div className={`flex size-8 items-center justify-center rounded-xl ${selected ? "bg-[#196b63] text-white" : "bg-slate-100 text-slate-500"}`}><Icon className="size-4" /></div><span className="text-sm font-semibold text-slate-800">{item.name}</span></div><p className="mt-2 text-xs leading-5 text-slate-500">{item.description}</p></button>; })}</section>
 
-            {!isAuthenticated && !loading && <div className="mb-4 flex items-start gap-3 rounded-2xl border border-[#f2dba9] bg-[#fff9ea] p-4 text-sm text-[#74511b]"><AlertCircle className="mt-0.5 size-5 shrink-0" /><p>你可以先瀏覽介面；登入後才會啟用安全上傳、品牌託管解題、錯題保存與教師協助通知。</p></div>}
-            <AIChatBox
-              messages={messages}
-              onSendMessage={sendQuestion}
-              onAttachmentsSelected={selectAttachments}
-              onClearAttachment={() => {
-                if (selectedHistoryAttachment) { setSelectedHistoryAttachment(null); setRecognitionDraft(""); return; }
-                const next = attachments[1];
-                setAttachments(current => current.slice(1));
-                setBatchSessionId(next ? batchSessionId : null);
-                setRecognitionDraft(next?.transcription ?? "");
-              }}
-              onRecognizePhoto={recognizeHandwriting}
-              onAttachmentTranscriptionChange={value => {
-                setRecognitionDraft(value);
-                if (selectedHistoryAttachment) return;
-                if (activeAttachment) setAttachments(current => current.map(item => item.localId === activeAttachment.localId ? { ...item, transcription: value } : item));
-              }}
-              attachmentName={selectedHistoryAttachment ? selectedHistoryAttachment.filename : activeAttachment?.file.name}
-              attachmentPreview={selectedHistoryAttachment ? undefined : activeAttachment?.preview}
-              attachmentKind={selectedHistoryAttachment ? "text" : activeAttachment?.kind}
-              attachmentTranscription={recognitionDraft}
-              queuedAttachmentNames={selectedHistoryAttachment ? [] : attachments.slice(1).map(item => item.file.name)}
-              photoQuality={selectedHistoryAttachment ? { tone: "ready", message: "已選取上傳紀錄中的題目，直接輸入你的追問即可。" } : activeAttachment?.quality}
-              isRecognizing={recognizePhoto.isPending}
-              isLoading={solve.isPending || uploadPhoto.isPending}
-              suggestedPrompts={suggestedPromptsForUnit(grade, unit.key, unit.label)}
-              batchMaxQuestions={maxBatchQuestions}
-            />
+                {!isAuthenticated && !loading && <div className="mb-4 flex items-start gap-3 rounded-2xl border border-[#f2dba9] bg-[#fff9ea] p-4 text-sm text-[#74511b]"><AlertCircle className="mt-0.5 size-5 shrink-0" /><p>你可以先瀏覽介面；登入後才會啟用安全上傳、品牌託管解題、錯題保存與教師協助通知。</p></div>}
+                <AIChatBox
+                  messages={messages}
+                  onSendMessage={sendQuestion}
+                  onAttachmentsSelected={selectAttachments}
+                  onClearAttachment={() => {
+                    if (selectedHistoryAttachment) { setSelectedHistoryAttachment(null); setRecognitionDraft(""); return; }
+                    const next = attachments[1];
+                    setAttachments(current => current.slice(1));
+                    setBatchSessionId(next ? batchSessionId : null);
+                    setRecognitionDraft(next?.transcription ?? "");
+                  }}
+                  onRecognizePhoto={recognizeHandwriting}
+                  onAttachmentTranscriptionChange={value => {
+                    setRecognitionDraft(value);
+                    if (selectedHistoryAttachment) return;
+                    if (activeAttachment) setAttachments(current => current.map(item => item.localId === activeAttachment.localId ? { ...item, transcription: value } : item));
+                  }}
+                  attachmentName={selectedHistoryAttachment ? selectedHistoryAttachment.filename : activeAttachment?.file.name}
+                  attachmentPreview={selectedHistoryAttachment ? undefined : activeAttachment?.preview}
+                  attachmentKind={selectedHistoryAttachment ? "text" : activeAttachment?.kind}
+                  attachmentTranscription={recognitionDraft}
+                  queuedAttachmentNames={selectedHistoryAttachment ? [] : attachments.slice(1).map(item => item.file.name)}
+                  photoQuality={selectedHistoryAttachment ? { tone: "ready", message: "已選取上傳紀錄中的題目，直接輸入你的追問即可。" } : activeAttachment?.quality}
+                  isRecognizing={recognizePhoto.isPending}
+                  isLoading={solve.isPending || uploadPhoto.isPending}
+                  suggestedPrompts={suggestedPromptsForUnit(grade, unit.key, unit.label)}
+                  batchMaxQuestions={maxBatchQuestions}
+                  onGoToPracticeGenerator={() => setActiveTab("practice")}
+                />
 
-            {lastAttempt && (lastAttempt.id ? (
-              <section className="mt-5 rounded-[1.5rem] border border-[#d8ebe7] bg-[#f7fcfa] p-4 sm:p-5"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><p className="flex items-center gap-2 text-sm font-semibold text-[#173b4d]"><NotebookPen className="size-4 text-[#196b63]" />把這題變成你的學習資產</p><p className="mt-1 text-xs leading-5 text-slate-500">信心指標 {lastAttempt.confidence}%{lastAttempt.needsClarification ? "・需要補充題目資訊" : "・已完成結構化解題"}</p></div><div className="flex max-w-full gap-2 overflow-x-auto pb-1 sm:flex-wrap"><Button size="sm" variant="outline" onClick={() => markMistake.mutate({ attemptId: lastAttempt.id!, markedWrong: true })} disabled={markMistake.isPending} className="shrink-0 rounded-full border-[#d8bd79] bg-white text-[#76521a] hover:bg-[#fffaf0]"><Tag className="mr-1.5 size-3.5" />標記為常犯錯題</Button><Button size="sm" variant="outline" onClick={() => report("wrong_answer")} disabled={reportConcern.isPending} className="shrink-0 rounded-full border-[#eacbc2] bg-white text-[#9a4331] hover:bg-[#fff5f2]"><FileWarning className="mr-1.5 size-3.5" />回報答案問題</Button><Button size="sm" onClick={() => report("teacher_help")} disabled={reportConcern.isPending} className="shrink-0 rounded-full bg-[#173b4d] hover:bg-[#0f2e3d]"><GraduationCap className="mr-1.5 size-3.5" />請教師協助</Button></div></div>
-                <div className="mt-4 rounded-2xl bg-white p-3 ring-1 ring-[#d8ebe7]"><p className="text-xs font-semibold text-[#196b63]">變式練習</p><p className="mt-1 text-sm leading-6 text-slate-700">{lastAttempt.variationQuestion}</p><Textarea value={practiceAnswer} onChange={event => setPracticeAnswer(event.target.value)} placeholder="可先寫下你的答案或思路，之後再回來檢查。" className="mt-3 min-h-20 border-slate-200 text-sm" /><div className="mt-3 flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => saveVariation("not_attempted")} disabled={savePractice.isPending} className="rounded-full">稍後練習</Button><Button size="sm" variant="outline" onClick={() => saveVariation("needs_review")} disabled={savePractice.isPending} className="rounded-full">完成，請幫我回顧</Button><Button size="sm" onClick={() => saveVariation("correct")} disabled={savePractice.isPending} className="rounded-full bg-[#196b63] hover:bg-[#115950]">我已完成</Button></div></div>
-              </section>
+                {lastAttempt && (lastAttempt.id ? (
+                  <section className="mt-5 rounded-[1.5rem] border border-[#d8ebe7] bg-[#f7fcfa] p-4 sm:p-5"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><p className="flex items-center gap-2 text-sm font-semibold text-[#173b4d]"><NotebookPen className="size-4 text-[#196b63]" />把這題變成你的學習資產</p><p className="mt-1 text-xs leading-5 text-slate-500">信心指標 {lastAttempt.confidence}%{lastAttempt.needsClarification ? "・需要補充題目資訊" : "・已完成結構化解題"}</p></div><div className="flex max-w-full gap-2 overflow-x-auto pb-1 sm:flex-wrap"><Button size="sm" variant="outline" onClick={() => markMistake.mutate({ attemptId: lastAttempt.id!, markedWrong: true })} disabled={markMistake.isPending} className="shrink-0 rounded-full border-[#d8bd79] bg-white text-[#76521a] hover:bg-[#fffaf0]"><Tag className="mr-1.5 size-3.5" />標記為常犯錯題</Button><Button size="sm" variant="outline" onClick={() => report("wrong_answer")} disabled={reportConcern.isPending} className="shrink-0 rounded-full border-[#eacbc2] bg-white text-[#9a4331] hover:bg-[#fff5f2]"><FileWarning className="mr-1.5 size-3.5" />回報答案問題</Button><Button size="sm" onClick={() => report("teacher_help")} disabled={reportConcern.isPending} className="shrink-0 rounded-full bg-[#173b4d] hover:bg-[#0f2e3d]"><GraduationCap className="mr-1.5 size-3.5" />請教師協助</Button></div></div>
+                    <div className="mt-4 rounded-2xl bg-white p-3 ring-1 ring-[#d8ebe7]"><p className="text-xs font-semibold text-[#196b63]">變式練習</p><p className="mt-1 text-sm leading-6 text-slate-700">{lastAttempt.variationQuestion}</p><Textarea value={practiceAnswer} onChange={event => setPracticeAnswer(event.target.value)} placeholder="可先寫下你的答案或思路，之後再回來檢查。" className="mt-3 min-h-20 border-slate-200 text-sm" /><div className="mt-3 flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => saveVariation("not_attempted")} disabled={savePractice.isPending} className="rounded-full">稍後練習</Button><Button size="sm" variant="outline" onClick={() => saveVariation("needs_review")} disabled={savePractice.isPending} className="rounded-full">完成，請幫我回顧</Button><Button size="sm" onClick={() => saveVariation("correct")} disabled={savePractice.isPending} className="rounded-full bg-[#196b63] hover:bg-[#115950]">我已完成</Button></div></div>
+                  </section>
+                ) : (
+                  // 這次是因為上傳的照片／檔案資訊不足才需要補充，不會寫入學習紀錄，所以沒有可標記／建立練習的對象。
+                  <section className="mt-5 rounded-[1.5rem] border border-[#f0dcc0] bg-[#fffaf2] p-4 text-xs leading-5 text-[#8a5a1f] sm:p-5">
+                    圖片或檔案的題目資訊還不夠完整，這次不會計入學習紀錄。請補拍清楚一點，或直接補充題目文字後再問一次。
+                  </section>
+                ))}
+              </>
             ) : (
-              // 這次是因為上傳的照片／檔案資訊不足才需要補充，不會寫入學習紀錄，所以沒有可標記／建立練習的對象。
-              <section className="mt-5 rounded-[1.5rem] border border-[#f0dcc0] bg-[#fffaf2] p-4 text-xs leading-5 text-[#8a5a1f] sm:p-5">
-                圖片或檔案的題目資訊還不夠完整，這次不會計入學習紀錄。請補拍清楚一點，或直接補充題目文字後再問一次。
-              </section>
-            ))}
+              <PracticeGenerator
+                grade={grade}
+                unitKey={unit.key}
+                unitLabel={unit.label}
+                isAuthenticated={isAuthenticated}
+                onRequireAuth={() => setAuthDialogOpen(true)}
+                onPractice={handlePracticeToSolve}
+              />
+            )}
           </div>
 
           <aside className="space-y-5 lg:pt-1">
