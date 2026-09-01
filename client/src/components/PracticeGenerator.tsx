@@ -1,8 +1,12 @@
 import { Button } from "@/components/ui/button";
 import { MathText } from "@/components/MathText";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { trpc } from "@/lib/trpc";
 import { PRACTICE_DIFFICULTIES, PRACTICE_DIFFICULTY_DESCRIPTIONS, PRACTICE_DIFFICULTY_LABELS, type Grade, type PracticeDifficulty, type TutorMode } from "../../../shared/mathCurriculum";
-import { BookOpenCheck, Clock3, Lightbulb, Loader2, Sparkles, Wand2 } from "lucide-react";
+import { BookOpenCheck, Clock3, Lightbulb, Loader2, Sparkles, Trash2, Wand2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -35,6 +39,38 @@ function difficultyBadgeClass(difficulty: PracticeDifficulty, selected: boolean)
   return "border-slate-200 bg-white text-slate-500 hover:border-slate-300";
 }
 
+/** 刪除單一出題紀錄前的確認對話框；已送去解題區的題目仍可刪除，只是刪掉的是「出題紀錄」本身，不影響已完成的解題紀錄。 */
+function DeletePracticeQuestionButton({ questionText, isDeleting, onConfirm, size = "sm" as const, variant = "outline" as const }: {
+  questionText: string; isDeleting: boolean; onConfirm: () => void; size?: "sm" | "icon"; variant?: "outline" | "ghost";
+}) {
+  return (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button type="button" size={size} variant={variant} disabled={isDeleting}
+          className={size === "icon" ? "size-7 shrink-0 rounded-full text-slate-400 hover:bg-red-50 hover:text-red-600" : "rounded-full border-slate-200 bg-white text-xs text-slate-500 hover:border-red-200 hover:bg-red-50 hover:text-red-600"}>
+          {isDeleting ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className={size === "icon" ? "size-3.5" : "mr-1.5 size-3.5"} />}
+          {size !== "icon" && "刪除"}
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>刪除這筆出題紀錄？</AlertDialogTitle>
+          <AlertDialogDescription asChild>
+            <div className="space-y-2">
+              <p>刪除後就看不到這一題，也無法復原。</p>
+              <p className="line-clamp-3 rounded-lg bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-600"><MathText text={questionText} /></p>
+            </div>
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>取消</AlertDialogCancel>
+          <AlertDialogAction onClick={onConfirm} className="bg-red-600 hover:bg-red-700 focus-visible:ring-red-300">確定刪除</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
 /** 完全獨立於解題聊天區的「請系統出題」區塊：不需要學生先提供任何題目。 */
 export function PracticeGenerator({ grade, unitKey, unitLabel, isAuthenticated, onRequireAuth, onPractice }: PracticeGeneratorProps) {
   const [difficulty, setDifficulty] = useState<PracticeDifficulty>("intro");
@@ -45,6 +81,10 @@ export function PracticeGenerator({ grade, unitKey, unitLabel, isAuthenticated, 
   const generatePractice = trpc.tutor.generatePractice.useMutation({
     onSuccess: () => { void utils.tutor.listPracticeQuestions.invalidate(); },
     onError: error => toast.error(error.message || "出題暫時無法使用，請稍後再試。"),
+  });
+  const deletePractice = trpc.tutor.deletePracticeQuestion.useMutation({
+    onSuccess: () => { toast.success("已刪除這筆出題紀錄。"); void utils.tutor.listPracticeQuestions.invalidate(); },
+    onError: error => toast.error(error.message || "刪除失敗，請稍後再試。"),
   });
 
   const currentUnitQuestions = (questions.data ?? []).filter(item => item.grade === grade && item.unitKey === unitKey);
@@ -94,13 +134,16 @@ export function PracticeGenerator({ grade, unitKey, unitLabel, isAuthenticated, 
               <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-800"><MathText text={latest.questionText} /></p>
               {latest.keyConcept && <p className="mt-2 text-xs leading-5 text-slate-500">關鍵觀念：<MathText text={latest.keyConcept} /></p>}
               {latest.difficultyNote && <p className="mt-1 text-xs leading-5 text-slate-400"><MathText text={latest.difficultyNote} /></p>}
-              <div className="mt-4 flex flex-wrap gap-2">
+              <div className="mt-4 flex flex-wrap items-center gap-2">
                 <Button size="sm" variant="outline" onClick={() => onPractice(latest.questionText, "guided", latest.id)} className="rounded-full border-[#a7d4cd] bg-white text-xs text-[#196b63]">
                   <Lightbulb className="mr-1.5 size-3.5" />不會寫，要提示
                 </Button>
                 <Button size="sm" variant="outline" onClick={() => onPractice(latest.questionText, "step-by-step", latest.id)} className="rounded-full border-[#a7d4cd] bg-white text-xs text-[#196b63]">
                   <BookOpenCheck className="mr-1.5 size-3.5" />直接看詳解
                 </Button>
+                <DeletePracticeQuestionButton questionText={latest.questionText}
+                  isDeleting={deletePractice.isPending && deletePractice.variables?.practiceQuestionId === latest.id}
+                  onConfirm={() => deletePractice.mutate({ practiceQuestionId: latest.id })} />
               </div>
             </article>
 
@@ -110,7 +153,12 @@ export function PracticeGenerator({ grade, unitKey, unitLabel, isAuthenticated, 
                 <div className="space-y-2">
                   {currentUnitQuestions.slice(1, 6).map(item => (
                     <div key={item.id} className="rounded-xl border border-slate-100 bg-[#fcfdfc] p-3">
-                      <p className="line-clamp-2 text-xs leading-5 text-slate-600"><MathText text={item.questionText} /></p>
+                      <div className="flex items-start gap-2">
+                        <p className="line-clamp-2 flex-1 text-xs leading-5 text-slate-600"><MathText text={item.questionText} /></p>
+                        <DeletePracticeQuestionButton questionText={item.questionText} size="icon" variant="ghost"
+                          isDeleting={deletePractice.isPending && deletePractice.variables?.practiceQuestionId === item.id}
+                          onConfirm={() => deletePractice.mutate({ practiceQuestionId: item.id })} />
+                      </div>
                       <div className="mt-2 flex items-center justify-between text-[11px] text-slate-400">
                         <span>{PRACTICE_DIFFICULTY_LABELS[item.difficulty]}難度</span>
                         {item.status === "sent_to_solve" ? <span>已送去解題區</span> : (
