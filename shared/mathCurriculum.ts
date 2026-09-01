@@ -35,4 +35,19 @@ export const GRADE_LABELS: Record<Grade, string> = {
   nine: "九年級",
 };
 
+export const PRACTICE_DIFFICULTIES = ["intro", "standard", "challenge"] as const;
+export type PracticeDifficulty = (typeof PRACTICE_DIFFICULTIES)[number];
+
+export const PRACTICE_DIFFICULTY_LABELS: Record<PracticeDifficulty, string> = {
+  intro: "入門",
+  standard: "基礎",
+  challenge: "進階",
+};
+
+export const PRACTICE_DIFFICULTY_DESCRIPTIONS: Record<PracticeDifficulty, string> = {
+  intro: "只考單一觀念、數字簡單，適合剛開始學這個單元。",
+  standard: "難度與課本例題相當，結合本單元的核心觀念。",
+  challenge: "需要多個觀念合併應用，適合已熟悉基礎的挑戰。",
+};
+
 export const MODE_LABELS: Record<string, string> = Object.fromEntries(DEFAULT_TUTOR_MODES.map(mode => [mode.key, mode.name]));
