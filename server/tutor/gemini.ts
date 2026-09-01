@@ -41,6 +41,34 @@ function isTransientProviderError(error: unknown) {
   return /\b429\b|RESOURCE_EXHAUSTED|\b503\b|UNAVAILABLE|\b408\b|timeout/i.test(message);
 }
 
+/**
+ * Gemini 在 JSON 模式下，若欄位內容包含 LaTeX 巨集（例如 \times、\text{}、\frac{}{}、
+ * \right），有時不會把巨集的反斜線正確跳脫成 JSON 合法的 \\times，而是直接寫出單一反
+ * 斜線。這剛好撞上 \t、\f、\b、\r、\n 這幾個「合法」的 JSON 逃脫序列：JSON.parse 不會
+ * 報錯，而是把反斜線加上緊接的那個字母吃成看不見的控制字元（tab／form feed／
+ * backspace／換行…），只留下巨集名稱剩下的字母。學生畫面上因此會看到「8imes25」
+ * 「rac{}{}」「ext{}」這類殘缺巨集名稱——分別對應被吃掉開頭字母的 \times、\frac、\text。
+ *
+ * 這裡在 JSON.parse 之前，把「反斜線 + t/f/b/r/n，後面還接著英文字母」這種明顯是被
+ * JSON 逃脫規則誤判的樣式，改寫成雙反斜線，讓 JSON.parse 正確還原成「一個反斜線 +
+ * 完整巨集名稱」的字面文字，而不是被吃成控制字元。
+ *
+ * \t、\f、\b 在這個應用的內容裡完全沒有正當用途（教學文字不會刻意塞入 tab／
+ * form feed／backspace 控制字元），所以只要後面接著字母就一律視為誤判、直接修正。
+ * \r、\n 比較敏感，因為欄位本身可能真的用 \n 表示換行；只在後面接的字母組成已知的
+ * LaTeX 巨集殘字（例如 ewcommand、ight、eq、otin、abla）時才修正，避免誤傷真正想
+ * 要換行、後面剛好接英文字母／數字的內容。
+ */
+const LATEX_MACRO_TAIL_AFTER_R_OR_N = /^(ewcommand|ight|eq|otin|abla|e\b)/;
+
+export function repairBrokenJsonEscapes(raw: string): string {
+  return raw.replace(/\\([tfbrn])(?=[A-Za-z])/g, (match, letter: string, offset: number) => {
+    if (letter === "t" || letter === "f" || letter === "b") return `\\\\${letter}`;
+    const tail = raw.slice(offset + 2, offset + 14);
+    return LATEX_MACRO_TAIL_AFTER_R_OR_N.test(tail) ? `\\\\${letter}` : match;
+  });
+}
+
 const clientCache = new Map<string, GoogleGenAI>();
 
 /**
@@ -86,7 +114,7 @@ export async function generateGeminiJson(request: GeminiStructuredRequest): Prom
       },
     });
     if (!response.text) throw new Error("Gemini 未傳回可解析的內容。");
-    return response.text;
+    return repairBrokenJsonEscapes(response.text);
   } catch (error) {
     console.error("Gemini tutor request failed", {
       message: error instanceof Error ? error.message : "unknown error",
