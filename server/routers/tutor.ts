@@ -257,16 +257,25 @@ export const tutorRouter = router({
       // （前端會看到「Unexpected token 'A', "An err o"...」這種解析失敗），而且因為
       // 是被平台強制中斷、不是正常的例外，下面 catch 裡的退額度邏輯也不會執行到。
       // 這裡自己抓時間，抓到快接近上限就主動收手、乾淨地回傳錯誤，而不是被動被砍斷。
+      //
+      // 光靠「攻擊次數上限」還不夠：如果單一次呼叫本身就卡很久（例如指數／科學記號
+      // 這類需要更仔細處理大數字與 LaTeX 上標的單元，實測明顯比其他單元慢），即使只
+      // 呼叫一次也可能單獨吃光 60 秒上限。所以除了總次數，每一次呼叫也都會依「剩餘
+      // 預算」給 generateGeminiJson 一個自己的逾時上限（timeoutMs），讓我們自己先
+      // 用 AbortController 中止、乾淨地丟出可辨識的錯誤，搶在平台強制砍斷連線之前
+      // 拿回主控權。
       const startedAt = Date.now();
       const TIME_BUDGET_MS = 40_000; // 60 秒上限扣掉資料庫存取與其他處理時間的安全緩衝。
+      const MIN_ATTEMPT_BUDGET_MS = 9_000; // 剩餘時間低於這個門檻就不值得再試一次，直接乾淨收手。
       const MAX_ATTEMPTS = 3;
 
-      // 最多嘗試兩次：模型偶爾會把思考草稿、沒收尾的 LaTeX，或運算符號被吃掉的殘缺敘述
+      // 最多嘗試三次：模型偶爾會把思考草稿、沒收尾的 LaTeX，或運算符號被吃掉的殘缺敘述
       // （例如「Wait, let's fix LaTeX in question.」、「1AB 的結果」）直接寫進欄位內容，
       // 與其把這種內容送給學生看，不如自動重打；但重試次數與時間都要有上限，避免拖過
       // 平台的執行時間上限。
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-        if (attempt > 1 && Date.now() - startedAt > TIME_BUDGET_MS) {
+        const remainingMs = TIME_BUDGET_MS - (Date.now() - startedAt);
+        if (remainingMs < MIN_ATTEMPT_BUDGET_MS) {
           console.error("Practice generation aborted retry: time budget exceeded", { grade: input.grade, unitKey: input.unitKey, elapsedMs: Date.now() - startedAt });
           break;
         }
@@ -276,12 +285,12 @@ export const tutorRouter = router({
           // JSON 被截斷、或逼得模型把草稿直接留在字串欄位裡，但額度也不能無限拉高，
           // 否則單次呼叫本身就可能拖過平台的執行時間上限。
           responseJsonSchema: practiceGenerationResponseFormat.json_schema.schema, maxOutputTokens: 4096,
-          // 出題（不像即時解題）對延遲不敏感，但對 LaTeX／敘述的完整度要求高；
-          // thinkingLevel 預設的 "low" 觀察到會讓 gemini-3.6-flash 更常留下沒收尾的
-          // LaTeX 巨集或自我修正措辭，被 hasLeakedDraftArtifacts 判定為不可用，導致
-          // 兩次嘗試都失敗、學生看到「出題服務暫時無法完成」。這裡改用 "medium"
-          // 換取更穩定的輸出品質。
-          thinkingLevel: "medium",
+          // 只有第一次嘗試、且剩餘時間還算充裕時才用 "medium" 換取更穩定的輸出品質；
+          // 之後的重試一律降回 "low"，確保能在剩餘的時間預算內完成，不要讓單次呼叫
+          // 本身就吃光整個預算。
+          thinkingLevel: attempt === 1 && remainingMs >= 25_000 ? "medium" : "low",
+          // 留 2 秒緩衝給 JSON 解析與後續處理，避免逾時控制本身踩線。
+          timeoutMs: Math.max(MIN_ATTEMPT_BUDGET_MS, remainingMs - 2_000),
         });
         const parsed = parsePracticeGeneration(content);
         const isClean = Boolean(parsed.question)
