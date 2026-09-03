@@ -3,8 +3,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { trpc } from "@/lib/trpc";
-import { CORE_UNITS, GRADE_LABELS, type Grade } from "../../../shared/mathCurriculum";
-import { AlertTriangle, ArrowLeft, BadgeCheck, BookOpenCheck, Check, ClipboardCheck, FilePlus2, FileUp, GraduationCap, Layers3, Loader2, LogOut, Plus, Save, SlidersHorizontal } from "lucide-react";
+import { CORE_UNITS, GRADE_LABELS, PRACTICE_DIFFICULTY_LABELS, type Grade } from "../../../shared/mathCurriculum";
+import { AlertTriangle, ArrowLeft, BadgeCheck, BookOpenCheck, Check, ClipboardCheck, Database, FilePlus2, FileUp, GraduationCap, Layers3, Loader2, LogOut, Plus, RefreshCw, Save, SlidersHorizontal } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Link } from "wouter";
@@ -22,6 +22,8 @@ type TeacherUnit = { id: string; grade: Grade; unitKey: string; name: string; te
 type TeacherMode = { id: string; modeKey: string; name: string; description: string; teachingInstructions: string; isApproved: boolean; version: number };
 type TeacherMaterial = { id: string; title: string; originalName: string; mimeType: string; byteSize: number; extractedText: string; isApproved: boolean; version: number; unitName: string; grade: Grade | null };
 type EscalationCase = { id: string; attemptId: string; reason: "wrong_answer" | "unclear_photo" | "teacher_help" | "safety_concern"; detail: string | null; priority: string; status: "new" | "reviewing" | "resolved" };
+type BankStatRow = { grade: Grade; unitKey: string; difficulty: "intro" | "standard" | "challenge"; availableCount: number };
+const BANK_TARGET_POOL_SIZE = 6; // 需與 server/tutor/practiceQuestionBank.ts 的 BANK_TARGET_POOL_SIZE 一致，僅用於前端顯示提示，不影響實際補題邏輯。
 
 function readFileAsDataUrl(file: File) { return new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("教材檔案讀取失敗。")); reader.onerror = () => reject(new Error("教材檔案讀取失敗。")); reader.readAsDataURL(file); }); }
 function materialType(file: File) { if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) return "application/pdf" as const; if (file.type === "text/markdown" || /\.md$/i.test(file.name)) return "text/markdown" as const; return "text/plain" as const; }
@@ -56,6 +58,7 @@ export default function TeacherWorkspaceNext() {
   const materials = trpc.tutor.teacher.listMaterials.useQuery(undefined, { enabled: isAuthenticated && canManage });
   const batchSettings = trpc.tutor.batchSettings.useQuery(undefined, { enabled: isAuthenticated && canManage, retry: false });
   const escalations = trpc.tutor.teacher.listEscalations.useQuery(undefined, { enabled: isAuthenticated && canManage });
+  const bankStats = trpc.tutor.teacher.listPracticeQuestionBankStats.useQuery(undefined, { enabled: isAuthenticated && canManage });
   const unitRows = (units.data ?? []) as TeacherUnit[];
   const caseRows = (escalations.data ?? []) as EscalationCase[];
   const modeRows = (modes.data ?? []) as TeacherMode[];
@@ -104,6 +107,15 @@ export default function TeacherWorkspaceNext() {
   const updateCase = trpc.tutor.teacher.updateEscalationStatus.useMutation({
     onSuccess: () => { toast.success("案件狀態已更新。"); void escalations.refetch(); },
     onError: error => toast.error(error.message),
+  });
+  const refillBank = trpc.tutor.teacher.refillPracticeQuestionBank.useMutation({
+    onSuccess: summary => {
+      toast.success(summary.questionsGenerated > 0
+        ? `已補入 ${summary.questionsGenerated} 題；${summary.combinationsBelowTarget} 個組合原本庫存不足。`
+        : "本次執行沒有補入新題目（可能題庫已滿，或本次全部失敗，請查看伺服器 log）。");
+      void bankStats.refetch();
+    },
+    onError: error => toast.error(error.message || "手動補題失敗，請稍後再試。"),
   });
 
   const loadUnit = (nextGrade: Grade, key: string, fallbackName: string) => {
@@ -202,6 +214,20 @@ export default function TeacherWorkspaceNext() {
         <div className="space-y-6">
           <section className="rounded-[1.5rem] border border-slate-200 bg-white p-5 shadow-sm"><div className="flex items-center justify-between"><div><p className="text-xs font-semibold tracking-[0.12em] text-[#196b63]">核准資料庫</p><h2 className="mt-1 text-xl font-semibold tracking-tight text-[#173b4d]">教材與規則狀態</h2></div><BadgeCheck className="size-6 text-[#196b63]" /></div><div className="mt-5 space-y-3">{units.isLoading || contents.isLoading ? <Loading label="讀取中…" /> : <><div className="rounded-2xl bg-[#f7f8f5] p-4"><p className="text-xs text-slate-500">已建立單元規則</p><p className="mt-1 text-2xl font-semibold text-[#173b4d]">{unitRows.length}<span className="ml-1 text-sm font-normal text-slate-400">個</span></p></div>{unitRows.slice(0, 5).map(item => <article key={item.id} className="rounded-xl border border-slate-100 p-3"><div className="flex items-start justify-between gap-3"><div><p className="text-sm font-semibold text-slate-700">{GRADE_LABELS[item.grade]}・{item.name}</p><p className="mt-1 text-xs text-slate-400">代碼 {item.unitKey}・版本 v{item.version}</p></div><span className={`rounded-full px-2 py-1 text-[11px] ${item.isApproved ? "bg-[#e5f3f0] text-[#196b63]" : "bg-[#fff3e6] text-[#9a5b21]"}`}>{item.isApproved ? "已核准" : "草稿"}</span></div></article>)}{!unitRows.length && <p className="rounded-xl bg-[#f7f8f5] p-3 text-xs leading-5 text-slate-500">請先建立至少一個單元規則，才能加入對應教材。</p>}<div className="border-t border-slate-100 pt-3"><p className="text-xs text-slate-500">已加入教材內容</p><p className="mt-1 text-lg font-semibold text-[#173b4d]">{contents.data?.length || 0} <span className="text-xs font-normal text-slate-400">筆</span></p></div></>}</div></section>
           <section className="rounded-[1.5rem] border border-slate-200 bg-white p-5 shadow-sm"><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-semibold tracking-[0.12em] text-[#9a5b21]">品質檢查</p><h2 className="mt-1 text-xl font-semibold tracking-tight text-[#173b4d]">學生回報案件</h2><p className="mt-1 text-xs leading-5 text-slate-500">案件從 Supabase 讀取，更新會直接寫回案件狀態。</p></div><AlertTriangle className="mt-1 size-5 text-[#c77948]" /></div><div className="mt-5 space-y-3">{escalations.isLoading ? <Loading label="讀取案件…" /> : caseRows.length ? caseRows.map(item => <article key={item.id} className="rounded-2xl border border-[#f0e0c5] bg-[#fffdfa] p-4"><div className="flex items-start justify-between gap-3"><div><p className="text-sm font-semibold text-slate-700">學生案件・{reasonLabel(item.reason)}</p><p className="mt-1 text-xs leading-5 text-slate-500">{item.detail || "學生未提供額外說明。"}</p></div><span className={`rounded-full px-2 py-1 text-[11px] ${item.priority === "high" ? "bg-[#f7ddd5] text-[#9a4331]" : "bg-[#f8edd6] text-[#9a5b21]"}`}>{item.priority === "high" ? "優先" : "一般"}</span></div><div className="mt-3 flex flex-wrap gap-2">{(["new", "reviewing", "resolved"] as const).map(status => <button type="button" key={status} disabled={updateCase.isPending} onClick={() => updateCase.mutate({ id: item.id, status })} className={`rounded-full px-2.5 py-1 text-[11px] ${item.status === status ? "bg-[#173b4d] text-white" : "bg-white text-slate-500 ring-1 ring-slate-200"}`}>{status === "new" ? "待處理" : status === "reviewing" ? "檢查中" : "已結案"}</button>)}</div></article>) : <div className="rounded-2xl bg-[#f7f8f5] p-4 text-sm leading-6 text-slate-500"><ClipboardCheck className="mb-2 size-5 text-[#a5cfc8]" />目前沒有學生回報案件。</div>}</div></section>
+          <section className="rounded-[1.5rem] border border-slate-200 bg-white p-5 shadow-sm"><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-semibold tracking-[0.12em] text-[#196b63]">背景補題排程</p><h2 className="mt-1 text-xl font-semibold tracking-tight text-[#173b4d]">練習題庫存量</h2><p className="mt-1 text-xs leading-5 text-slate-500">學生出題會優先從這裡秒回，庫存不足時才即時呼叫 Gemini。正式環境依 Vercel cron／GitHub Actions 排程自動補題，這裡的按鈕僅供立即手動補題（例如上線前預熱）。</p></div><Database className="mt-1 size-5 text-[#196b63]" /></div>
+            <div className="mt-5 space-y-3">
+              {bankStats.isLoading ? <Loading label="讀取題庫庫存…" /> : bankStats.data?.length ? (() => {
+                const rows = (bankStats.data ?? []) as BankStatRow[];
+                const lowStock = [...rows].sort((a, b) => a.availableCount - b.availableCount).slice(0, 6);
+                const emptyCount = rows.filter(item => item.availableCount === 0).length;
+                return <>
+                  <div className="rounded-2xl bg-[#f7f8f5] p-4"><p className="text-xs text-slate-500">目前題庫完全掏空的組合</p><p className="mt-1 text-2xl font-semibold text-[#173b4d]">{emptyCount}<span className="ml-1 text-sm font-normal text-slate-400">個（這些組合下次出題會直接即時呼叫 Gemini）</span></p></div>
+                  <div className="space-y-2">{lowStock.map(item => <div key={`${item.grade}:${item.unitKey}:${item.difficulty}`} className="flex items-center justify-between rounded-xl border border-slate-100 p-2.5 text-xs"><span className="text-slate-600">{GRADE_LABELS[item.grade]}・{CORE_UNITS[item.grade].find(unit => unit.key === item.unitKey)?.label ?? item.unitKey}・{PRACTICE_DIFFICULTY_LABELS[item.difficulty]}</span><span className={`rounded-full px-2 py-0.5 font-semibold ${item.availableCount === 0 ? "bg-[#f7ddd5] text-[#9a4331]" : item.availableCount < BANK_TARGET_POOL_SIZE ? "bg-[#fff3e6] text-[#9a5b21]" : "bg-[#e5f3f0] text-[#196b63]"}`}>{item.availableCount} 題</span></div>)}</div>
+                </>;
+              })() : <p className="rounded-xl bg-[#f7f8f5] p-3 text-xs leading-5 text-slate-500">題庫目前是空的（全新環境或尚未執行過補題排程）；學生出題會自動退回即時生成，不會出錯，但體感會較慢。</p>}
+              <Button type="button" onClick={() => refillBank.mutate()} disabled={refillBank.isPending} variant="outline" className="w-full rounded-xl border-[#a7d4cd] text-[#196b63]"><RefreshCw className={`mr-2 size-4 ${refillBank.isPending ? "animate-spin" : ""}`} />{refillBank.isPending ? "正在補題（可能需要數十秒）…" : "立即手動補題一次"}</Button>
+            </div>
+          </section>
         </div>
       </div>
     </main>
