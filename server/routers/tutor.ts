@@ -1,9 +1,11 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { CORE_UNITS, GRADES, PRACTICE_DIFFICULTIES, PRACTICE_DIFFICULTY_DESCRIPTIONS, PRACTICE_DIFFICULTY_LABELS, type Grade } from "../../shared/mathCurriculum";
-import { buildPracticeGenerationInstructions, buildTutorInstructions, formatTutorReply, hasLeakedDraftArtifacts, parsePracticeGeneration, parseTutorSolution, practiceGenerationResponseFormat, solutionHasLeakedDraftArtifacts, tutorResponseFormat } from "../tutor/engine";
+import { CORE_UNITS, GRADES, PRACTICE_DIFFICULTIES, type Grade } from "../../shared/mathCurriculum";
+import { buildTutorInstructions, formatTutorReply, parseTutorSolution, solutionHasLeakedDraftArtifacts, tutorResponseFormat } from "../tutor/engine";
 import { buildPracticeSheetDocx, buildPracticeSheetPdf } from "../tutor/exportDocuments";
 import { GEMINI_TUTOR_MODEL, generateGeminiJson } from "../tutor/gemini";
+import { generatePracticeQuestionWithRetry } from "../tutor/practiceGeneration";
+import { refillPracticeQuestionBank } from "../tutor/practiceQuestionBank";
 import * as tutorDb from "../tutor/supabaseDb";
 import * as supabaseTeacherDb from "../tutor/supabaseTeacherDb";
 import { adminProcedure, protectedProcedure, router } from "../_core/trpc";
@@ -242,64 +244,42 @@ export const tutorRouter = router({
     if (!quota.allowed) throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: quota.message });
 
     let unitLabel = approvedCustomUnit?.label ?? resolveUnitLabel(input.grade, input.unitKey);
-    let generation: ReturnType<typeof parsePracticeGeneration> = { question: "", keyConcept: "", difficultyNote: "" };
+
+    // 優先從背景排程預先生成的題庫（見 practiceQuestionBank.ts）原子領取一題：
+    // 不需要等 Gemini 回應，學生體感永遠是「秒出題」，也徹底避開 Serverless 函式
+    // 時間上限——指數／科學記號這類天生較慢的單元也不再有逾時風險。
+    // 題庫查詢本身失敗（例如 RPC 尚未部署、資料庫暫時不可用）不應該擋住學生出題：
+    // 記錄後直接退回下面的即時生成路徑，讓「題庫只是加速，不是必要條件」永遠成立。
+    try {
+      const bankItem = await tutorDb.claimPracticeQuestionFromBank({
+        grade: input.grade, unitKey: input.unitKey, difficulty: input.difficulty, userId: appUser.id,
+      });
+      if (bankItem) {
+        const saved = await tutorDb.createPracticeQuestion({
+          userId: appUser.id, grade: input.grade, unitKey: input.unitKey, unitLabel, difficulty: input.difficulty,
+          questionText: bankItem.questionText, keyConcept: bankItem.keyConcept, difficultyNote: bankItem.difficultyNote,
+          model: bankItem.model || GEMINI_TUTOR_MODEL, source: "bank",
+        });
+        return { practiceQuestionId: saved.id, question: bankItem.questionText, keyConcept: bankItem.keyConcept, difficultyNote: bankItem.difficultyNote, remaining: quota.remaining };
+      }
+    } catch (error) {
+      console.error("Practice question bank claim failed, falling back to live generation", {
+        grade: input.grade, unitKey: input.unitKey, difficulty: input.difficulty,
+        message: error instanceof Error ? error.message : "unknown error",
+      });
+    }
+
+    // 題庫用盡（或暫時不可用）時，退回即時呼叫 Gemini 補題；重試與時間預算保護邏輯
+    // 抽在 practiceGeneration.ts 的 generatePracticeQuestionWithRetry，與補題排程共用。
+    let generation: { question: string; keyConcept: string; difficultyNote: string } = { question: "", keyConcept: "", difficultyNote: "" };
     try {
       const context = await supabaseTeacherDb.getTutorContext(input.grade, input.unitKey);
       unitLabel = approvedCustomUnit?.label ?? context.name ?? unitLabel;
-      const instruction = buildPracticeGenerationInstructions({
-        grade: input.grade, unitLabel, difficultyLabel: PRACTICE_DIFFICULTY_LABELS[input.difficulty],
-        difficultyGuidance: PRACTICE_DIFFICULTY_DESCRIPTIONS[input.difficulty], teacherRules: context.rules, approvedContext: context.contents,
+      const outcome = await generatePracticeQuestionWithRetry({
+        grade: input.grade, unitKey: input.unitKey, unitLabel, difficulty: input.difficulty,
+        teacherRules: context.rules, approvedContext: context.contents,
       });
-      const prompt = `請為「${unitLabel}」出一題全新的「${PRACTICE_DIFFICULTY_LABELS[input.difficulty]}」難度練習題。`;
-
-      // 時間預算保護：Vercel 這個 API 路由設定 maxDuration=60 秒，
-      // 如果重試把總耗時拖過這個上限，平台會直接砍斷連線、回傳非 JSON 的錯誤頁
-      // （前端會看到「Unexpected token 'A', "An err o"...」這種解析失敗），而且因為
-      // 是被平台強制中斷、不是正常的例外，下面 catch 裡的退額度邏輯也不會執行到。
-      // 這裡自己抓時間，抓到快接近上限就主動收手、乾淨地回傳錯誤，而不是被動被砍斷。
-      //
-      // 光靠「攻擊次數上限」還不夠：如果單一次呼叫本身就卡很久（例如指數／科學記號
-      // 這類需要更仔細處理大數字與 LaTeX 上標的單元，實測明顯比其他單元慢），即使只
-      // 呼叫一次也可能單獨吃光 60 秒上限。所以除了總次數，每一次呼叫也都會依「剩餘
-      // 預算」給 generateGeminiJson 一個自己的逾時上限（timeoutMs），讓我們自己先
-      // 用 AbortController 中止、乾淨地丟出可辨識的錯誤，搶在平台強制砍斷連線之前
-      // 拿回主控權。
-      const startedAt = Date.now();
-      const TIME_BUDGET_MS = 40_000; // 60 秒上限扣掉資料庫存取與其他處理時間的安全緩衝。
-      const MIN_ATTEMPT_BUDGET_MS = 9_000; // 剩餘時間低於這個門檻就不值得再試一次，直接乾淨收手。
-      const MAX_ATTEMPTS = 3;
-
-      // 最多嘗試三次：模型偶爾會把思考草稿、沒收尾的 LaTeX，或運算符號被吃掉的殘缺敘述
-      // （例如「Wait, let's fix LaTeX in question.」、「1AB 的結果」）直接寫進欄位內容，
-      // 與其把這種內容送給學生看，不如自動重打；但重試次數與時間都要有上限，避免拖過
-      // 平台的執行時間上限。
-      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-        const remainingMs = TIME_BUDGET_MS - (Date.now() - startedAt);
-        if (remainingMs < MIN_ATTEMPT_BUDGET_MS) {
-          console.error("Practice generation aborted retry: time budget exceeded", { grade: input.grade, unitKey: input.unitKey, elapsedMs: Date.now() - startedAt });
-          break;
-        }
-        const content = await generateGeminiJson({
-          instruction, prompt,
-          // 思考型模型會先消耗部分輸出 token 在內部推理／草稿，額度太低容易讓最終
-          // JSON 被截斷、或逼得模型把草稿直接留在字串欄位裡，但額度也不能無限拉高，
-          // 否則單次呼叫本身就可能拖過平台的執行時間上限。
-          responseJsonSchema: practiceGenerationResponseFormat.json_schema.schema, maxOutputTokens: 4096,
-          // 只有第一次嘗試、且剩餘時間還算充裕時才用 "medium" 換取更穩定的輸出品質；
-          // 之後的重試一律降回 "low"，確保能在剩餘的時間預算內完成，不要讓單次呼叫
-          // 本身就吃光整個預算。
-          thinkingLevel: attempt === 1 && remainingMs >= 25_000 ? "medium" : "low",
-          // 留 2 秒緩衝給 JSON 解析與後續處理，避免逾時控制本身踩線。
-          timeoutMs: Math.max(MIN_ATTEMPT_BUDGET_MS, remainingMs - 2_000),
-        });
-        const parsed = parsePracticeGeneration(content);
-        const isClean = Boolean(parsed.question)
-          && !hasLeakedDraftArtifacts(parsed.question)
-          && !hasLeakedDraftArtifacts(parsed.keyConcept)
-          && !hasLeakedDraftArtifacts(parsed.difficultyNote);
-        if (isClean) { generation = parsed; break; }
-        console.error(`Practice generation attempt ${attempt} produced unusable content`, { grade: input.grade, unitKey: input.unitKey, difficulty: input.difficulty, contentPreview: content.slice(0, 500) });
-      }
+      if (outcome.ok) generation = outcome.generation;
     } catch (error) {
       await tutorDb.refundPracticeQuota(appUser.id);
       throw error;
@@ -310,7 +290,8 @@ export const tutorRouter = router({
     }
     const saved = await tutorDb.createPracticeQuestion({
       userId: appUser.id, grade: input.grade, unitKey: input.unitKey, unitLabel, difficulty: input.difficulty,
-      questionText: generation.question, keyConcept: generation.keyConcept, difficultyNote: generation.difficultyNote, model: GEMINI_TUTOR_MODEL,
+      questionText: generation.question, keyConcept: generation.keyConcept, difficultyNote: generation.difficultyNote,
+      model: GEMINI_TUTOR_MODEL, source: "live",
     });
     return { practiceQuestionId: saved.id, question: generation.question, keyConcept: generation.keyConcept, difficultyNote: generation.difficultyNote, remaining: quota.remaining };
   }),
@@ -423,6 +404,19 @@ export const tutorRouter = router({
     listEscalations: adminProcedure.query(async ({ ctx }) => { await tutorDb.assertSupabaseAdmin(ctx.user); return tutorDb.listEscalations(); }),
     listQuotaRefundFailures: adminProcedure.query(async ({ ctx }) => { await tutorDb.assertSupabaseAdmin(ctx.user); return tutorDb.listQuotaRefundFailures(); }),
     resolveQuotaRefundFailure: adminProcedure.input(z.object({ id: uuidSchema })).mutation(async ({ ctx, input }) => { await tutorDb.assertSupabaseAdmin(ctx.user); await tutorDb.resolveQuotaRefundFailure(input.id); return { success: true as const }; }),
+    // 題庫健康狀態：每個「年級＋單元＋難度」組合目前還有幾題可立即發放，讓教師／管理者
+    // 判斷是否需要調整 cron 頻率或 BANK_TARGET_POOL_SIZE，不需要另外查 SQL。
+    listPracticeQuestionBankStats: adminProcedure.query(async ({ ctx }) => {
+      await tutorDb.assertSupabaseAdmin(ctx.user);
+      return tutorDb.getPracticeQuestionBankPoolCounts();
+    }),
+    // 手動立即補題：主要用於本機開發、正式上線前快速預熱題庫，或 cron 尚未設定完成前的
+    // 應急手段。時間預算比 cron 略保守，避免管理者在介面上等待過久；正式環境仍建議
+    // 依賴 vercel.json 設定的排程自動補題，不需要每次都手動觸發。
+    refillPracticeQuestionBank: adminProcedure.mutation(async ({ ctx }) => {
+      await tutorDb.assertSupabaseAdmin(ctx.user);
+      return refillPracticeQuestionBank({ timeBudgetMs: 45_000 });
+    }),
     upsertMode: adminProcedure.input(z.object({ modeKey: modeSchema, name: z.string().trim().min(1).max(80), description: z.string().trim().min(1).max(240), teachingInstructions: z.string().trim().min(30).max(3000), isApproved: z.boolean(), createOnly: z.boolean().optional().default(false) })).mutation(async ({ ctx, input }) => {
       await tutorDb.assertSupabaseAdmin(ctx.user);
       if (input.createOnly && await supabaseTeacherDb.getTeacherTutorMode(input.modeKey)) throw new TRPCError({ code: "CONFLICT", message: "已有相同解題模式代碼，請改用新的代碼或編輯既有流程。" });
