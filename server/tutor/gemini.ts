@@ -17,6 +17,16 @@ type GeminiStructuredRequest = {
   purpose?: "solve" | "material";
   /** 預設 "low"。thinking 等級越高，延遲越高、也越容易把推理過程留在輸出欄位裡。 */
   thinkingLevel?: "minimal" | "low" | "medium" | "high";
+  /**
+   * 這次呼叫本身的時間上限（毫秒）。不設定就沒有上限，完全交給 Gemini 自己決定
+   * 何時回應——這在單次呼叫罕見卡很久時很危險：呼叫方（例如 Vercel 的 API 路由）
+   * 通常自己也有總執行時間上限，一旦被平台強制砍斷連線，回傳的會是平台自己的
+   * HTML 錯誤頁而不是我們的 JSON 錯誤格式，前端 tRPC client 會直接解析失敗
+   * （出現「Unexpected token '<'/'A'...is not valid JSON」)。設定這個參數後，
+   * 我們會自己先用 AbortController 中止請求、乾淨地拋出可辨識的逾時錯誤，
+   * 搶在平台強制砍斷之前把主控權拿回來。
+   */
+  timeoutMs?: number;
 };
 
 /** 不將供應商原始錯誤、配額或帳務資訊傳回瀏覽器。 */
@@ -40,7 +50,7 @@ function getRetryAfterSeconds(error: unknown) {
 
 function isTransientProviderError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error ?? "");
-  return /\b429\b|RESOURCE_EXHAUSTED|\b503\b|UNAVAILABLE|\b408\b|timeout/i.test(message);
+  return /\b429\b|RESOURCE_EXHAUSTED|\b503\b|UNAVAILABLE|\b408\b|timeout|aborted|AbortError/i.test(message);
 }
 
 /**
@@ -103,6 +113,10 @@ function getGeminiClient(purpose: "solve" | "material" = "solve") {
  * Supabase 簽名網址傳入瀏覽器；圖片或 PDF 以已授權讀取後的 inline bytes 提供。
  */
 export async function generateGeminiJson(request: GeminiStructuredRequest): Promise<string> {
+  // 只在有設定 timeoutMs 時才建立 AbortController：呼叫方（例如即時解題）若沒有
+  // 明確的時間預算考量，維持原本「完全交給 Gemini 決定」的行為，不改變既有時序。
+  const controller = request.timeoutMs ? new AbortController() : undefined;
+  const timer = controller ? setTimeout(() => controller.abort(new Error(`Gemini 請求超過自訂逾時 ${request.timeoutMs}ms，主動中止。`)), request.timeoutMs) : undefined;
   try {
     const response = await getGeminiClient(request.purpose ?? "solve").models.generateContent({
       model: GEMINI_TUTOR_MODEL,
@@ -125,6 +139,7 @@ export async function generateGeminiJson(request: GeminiStructuredRequest): Prom
         // 思考等級明確降到 low：對這個應用需要的「出一道國中數學題」「照 schema 說明
         // 解法」這類任務來說，思考量已經足夠，同時大幅降低逾時與內容洩漏的機率。
         thinkingConfig: { thinkingLevel: THINKING_LEVEL_MAP[request.thinkingLevel ?? "low"] as any },
+        ...(controller ? { abortSignal: controller.signal } : {}),
       },
     });
     if (!response.text) throw new Error("Gemini 未傳回可解析的內容。");
@@ -135,5 +150,7 @@ export async function generateGeminiJson(request: GeminiStructuredRequest): Prom
     });
     if (isTransientProviderError(error)) throw new GeminiTemporaryUnavailableError(getRetryAfterSeconds(error));
     throw new Error("解題服務暫時無法完成這次處理，請稍後再試。");
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
