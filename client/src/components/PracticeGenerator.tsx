@@ -44,7 +44,13 @@ export function PracticeGenerator({ grade, unitKey, unitLabel, isAuthenticated, 
   };
   const generatePractice = trpc.tutor.generatePractice.useMutation({
     onSuccess: () => { void utils.tutor.listPracticeQuestions.invalidate(); },
-    onError: error => toast.error(error.message || "出題暫時無法使用，請稍後再試。"),
+    onError: error => {
+      // 伺服器逾時（例如平台強制中斷連線）時，回傳的可能不是正常的 tRPC 錯誤，
+      // 而是一段 HTML／純文字錯誤頁，client 端會解析 JSON 失敗，跳出很難懂的
+      // 「Unexpected token 'A'...」這類訊息，這裡統一改成對學生友善的說法。
+      const isParseFailure = /unexpected token|is not valid json/i.test(error.message);
+      toast.error(isParseFailure ? "出題花的時間有點久，伺服器先中斷了這次請求，請再試一次。" : (error.message || "出題暫時無法使用，請稍後再試。"));
+    },
   });
   const deletePracticeQuestion = trpc.tutor.deletePracticeQuestion.useMutation({
     onSuccess: () => { void utils.tutor.listPracticeQuestions.invalidate(); },
