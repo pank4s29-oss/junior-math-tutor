@@ -187,9 +187,16 @@ export const tutorRouter = router({
 
       // 最多嘗試兩次：模型偶爾會把思考草稿或沒收尾的 LaTeX 直接寫進欄位內容
       // （例如「Wait, let's fix LaTeX in question.」），與其把這種內容寫進學習紀錄，
-      // 不如自動重打一次；兩次都失敗才使用該次結果（讓學生至少看得到回覆，可回報問題）。
+      // 不如自動重打一次；但要有時間預算，避免總耗時拖過 Vercel maxDuration=60 秒的
+      // 上限被平台強制中斷（那樣會回傳非 JSON 的錯誤頁，前端解析會直接失敗）。
+      const solveStartedAt = Date.now();
+      const SOLVE_TIME_BUDGET_MS = 40_000;
       let parsedSolution: ReturnType<typeof parseTutorSolution> | null = null;
       for (let attempt = 1; attempt <= 2; attempt += 1) {
+        if (attempt > 1 && Date.now() - solveStartedAt > SOLVE_TIME_BUDGET_MS) {
+          console.error("Solve aborted retry: time budget exceeded", { grade: input.grade, unitKey: input.unitKey, elapsedMs: Date.now() - solveStartedAt });
+          break;
+        }
         content = await generateGeminiJson({ instruction, prompt, image, responseJsonSchema: tutorResponseFormat.json_schema.schema, maxOutputTokens: 3200 });
         const parsed = parseTutorSolution(content);
         if (!solutionHasLeakedDraftArtifacts(parsed)) { parsedSolution = parsed; break; }
@@ -245,15 +252,30 @@ export const tutorRouter = router({
       });
       const prompt = `請為「${unitLabel}」出一題全新的「${PRACTICE_DIFFICULTY_LABELS[input.difficulty]}」難度練習題。`;
 
-      // 最多嘗試三次：模型偶爾會把思考草稿、沒收尾的 LaTeX，或運算符號被吃掉的殘缺敘述
+      // 時間預算保護：Vercel 這個 API 路由設定 maxDuration=60 秒，
+      // 如果重試把總耗時拖過這個上限，平台會直接砍斷連線、回傳非 JSON 的錯誤頁
+      // （前端會看到「Unexpected token 'A', "An err o"...」這種解析失敗），而且因為
+      // 是被平台強制中斷、不是正常的例外，下面 catch 裡的退額度邏輯也不會執行到。
+      // 這裡自己抓時間，抓到快接近上限就主動收手、乾淨地回傳錯誤，而不是被動被砍斷。
+      const startedAt = Date.now();
+      const TIME_BUDGET_MS = 40_000; // 60 秒上限扣掉資料庫存取與其他處理時間的安全緩衝。
+      const MAX_ATTEMPTS = 2;
+
+      // 最多嘗試兩次：模型偶爾會把思考草稿、沒收尾的 LaTeX，或運算符號被吃掉的殘缺敘述
       // （例如「Wait, let's fix LaTeX in question.」、「1AB 的結果」）直接寫進欄位內容，
-      // 與其把這種內容送給學生看，不如自動重打；三次都失敗才視為真的出題失敗。
-      for (let attempt = 1; attempt <= 3; attempt += 1) {
+      // 與其把這種內容送給學生看，不如自動重打；但重試次數與時間都要有上限，避免拖過
+      // 平台的執行時間上限。
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+        if (attempt > 1 && Date.now() - startedAt > TIME_BUDGET_MS) {
+          console.error("Practice generation aborted retry: time budget exceeded", { grade: input.grade, unitKey: input.unitKey, elapsedMs: Date.now() - startedAt });
+          break;
+        }
         const content = await generateGeminiJson({
           instruction, prompt,
           // 思考型模型會先消耗部分輸出 token 在內部推理／草稿，額度太低容易讓最終
-          // JSON 被截斷、或逼得模型把草稿直接留在字串欄位裡，所以給足夠寬裕的額度。
-          responseJsonSchema: practiceGenerationResponseFormat.json_schema.schema, maxOutputTokens: 6000,
+          // JSON 被截斷、或逼得模型把草稿直接留在字串欄位裡，但額度也不能無限拉高，
+          // 否則單次呼叫本身就可能拖過平台的執行時間上限。
+          responseJsonSchema: practiceGenerationResponseFormat.json_schema.schema, maxOutputTokens: 4096,
         });
         const parsed = parsePracticeGeneration(content);
         const isClean = Boolean(parsed.question)
