@@ -15,6 +15,8 @@ type GeminiStructuredRequest = {
   maxOutputTokens: number;
   /** 預設 "solve"；教材擷取流程應明確傳入 "material" 以分流至獨立金鑰。 */
   purpose?: "solve" | "material";
+  /** 預設 "low"。thinking 等級越高，延遲越高、也越容易把推理過程留在輸出欄位裡。 */
+  thinkingLevel?: "minimal" | "low" | "medium" | "high";
 };
 
 /** 不將供應商原始錯誤、配額或帳務資訊傳回瀏覽器。 */
@@ -69,6 +71,12 @@ export function repairBrokenJsonEscapes(raw: string): string {
   });
 }
 
+// SDK 的 ThinkingLevel enum 底層就是這幾個大寫字串常數；這裡直接寫字面值，
+// 避免在測試環境對 @google/genai 的部分 mock 裡還要額外補這個匯出。
+const THINKING_LEVEL_MAP = {
+  minimal: "MINIMAL", low: "LOW", medium: "MEDIUM", high: "HIGH",
+} as const;
+
 const clientCache = new Map<string, GoogleGenAI>();
 
 /**
@@ -111,6 +119,12 @@ export async function generateGeminiJson(request: GeminiStructuredRequest): Prom
         responseJsonSchema: request.responseJsonSchema,
         temperature: 0.2,
         maxOutputTokens: request.maxOutputTokens,
+        // gemini-3.6-flash 預設會開啟較高等級的思考（thinking），官方實測光是「第一個
+        // token 出現前」的等待時間中位數就高達 12 秒以上，且思考過程有時會被誤留在
+        // JSON 字串欄位裡（例如「Wait, let's fix LaTeX...」這類自言自語）。這裡把
+        // 思考等級明確降到 low：對這個應用需要的「出一道國中數學題」「照 schema 說明
+        // 解法」這類任務來說，思考量已經足夠，同時大幅降低逾時與內容洩漏的機率。
+        thinkingConfig: { thinkingLevel: THINKING_LEVEL_MAP[request.thinkingLevel ?? "low"] as any },
       },
     });
     if (!response.text) throw new Error("Gemini 未傳回可解析的內容。");
