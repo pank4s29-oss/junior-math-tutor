@@ -259,7 +259,7 @@ export const tutorRouter = router({
       // 這裡自己抓時間，抓到快接近上限就主動收手、乾淨地回傳錯誤，而不是被動被砍斷。
       const startedAt = Date.now();
       const TIME_BUDGET_MS = 40_000; // 60 秒上限扣掉資料庫存取與其他處理時間的安全緩衝。
-      const MAX_ATTEMPTS = 2;
+      const MAX_ATTEMPTS = 3;
 
       // 最多嘗試兩次：模型偶爾會把思考草稿、沒收尾的 LaTeX，或運算符號被吃掉的殘缺敘述
       // （例如「Wait, let's fix LaTeX in question.」、「1AB 的結果」）直接寫進欄位內容，
@@ -276,6 +276,12 @@ export const tutorRouter = router({
           // JSON 被截斷、或逼得模型把草稿直接留在字串欄位裡，但額度也不能無限拉高，
           // 否則單次呼叫本身就可能拖過平台的執行時間上限。
           responseJsonSchema: practiceGenerationResponseFormat.json_schema.schema, maxOutputTokens: 4096,
+          // 出題（不像即時解題）對延遲不敏感，但對 LaTeX／敘述的完整度要求高；
+          // thinkingLevel 預設的 "low" 觀察到會讓 gemini-3.6-flash 更常留下沒收尾的
+          // LaTeX 巨集或自我修正措辭，被 hasLeakedDraftArtifacts 判定為不可用，導致
+          // 兩次嘗試都失敗、學生看到「出題服務暫時無法完成」。這裡改用 "medium"
+          // 換取更穩定的輸出品質。
+          thinkingLevel: "medium",
         });
         const parsed = parsePracticeGeneration(content);
         const isClean = Boolean(parsed.question)
