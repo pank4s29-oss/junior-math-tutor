@@ -36,6 +36,9 @@ try {
       to_regclass('public.teacher_materials') is not null as teacher_materials_exists,
       to_regclass('public.tutor_batch_sessions') is not null as tutor_batch_sessions_exists,
       to_regclass('public.teacher_tutor_settings') is not null as teacher_tutor_settings_exists,
+      to_regclass('public.practice_question_bank') is not null as practice_question_bank_exists,
+      exists (select 1 from pg_proc where proname = 'claim_practice_question_bank_item') as claim_practice_question_bank_item_exists,
+      to_regclass('public.practice_question_bank_pool_stats') is not null as practice_question_bank_pool_stats_exists,
       exists (
         select 1 from storage.buckets
         where id = 'teacher-materials' and public = false
@@ -59,10 +62,10 @@ try {
   `);
 
   const result = rows[0];
-  if (!result.app_users_exists || !result.auth_identity_column_exists || !result.quota_function_exists || !result.quota_refund_function_exists || !result.student_mistake_marker_exists || !result.pdf_attachment_support_exists || !result.teacher_tutor_modes_exists || !result.teacher_materials_exists || !result.tutor_batch_sessions_exists || !result.teacher_tutor_settings_exists || !result.private_teacher_material_bucket_exists || !result.dynamic_mode_key_exists || !result.auth_bootstrap_trigger_exists) {
+  if (!result.app_users_exists || !result.auth_identity_column_exists || !result.quota_function_exists || !result.quota_refund_function_exists || !result.student_mistake_marker_exists || !result.pdf_attachment_support_exists || !result.teacher_tutor_modes_exists || !result.teacher_materials_exists || !result.tutor_batch_sessions_exists || !result.teacher_tutor_settings_exists || !result.private_teacher_material_bucket_exists || !result.dynamic_mode_key_exists || !result.auth_bootstrap_trigger_exists || !result.practice_question_bank_exists || !result.claim_practice_question_bank_item_exists || !result.practice_question_bank_pool_stats_exists) {
     throw new Error("Supabase migration 驗證不完整：請先比對 supabase/migrations 與遠端 schema，再決定是否執行 db push 或 migration repair。\n");
   }
-  console.log("Verified remote Supabase migrations: Auth identity, quota RPC with provider-failure refund, student uploads, private teacher materials, multi-question tutoring sessions, teacher batch settings, dynamic tutor modes, student mistake markers, and Auth bootstrap trigger.");
+  console.log("Verified remote Supabase migrations: Auth identity, quota RPC with provider-failure refund, student uploads, private teacher materials, multi-question tutoring sessions, teacher batch settings, dynamic tutor modes, student mistake markers, Auth bootstrap trigger, and the practice question bank (background refill cache) schema.");
 } finally {
   await client.end();
 }
