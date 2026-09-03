@@ -1,0 +1,37 @@
+name: 補題排程（練習題庫）
+
+# Vercel 內建的 crons 設定（見 vercel.json）在 Hobby 方案上最高只能「每天一次」，
+# 對「題庫用盡才即時生成」這個備援機制來說可能太少（尖峰時段題庫可能提早被領完）。
+# 這支 workflow 是完全免費、不受 Vercel 方案限制的替代方案：GitHub Actions 排程
+# 直接呼叫 /api/cron/refill-practice-bank，效果與 Vercel cron 完全相同。
+#
+# 使用方式：
+# 1. 在 repo 的 Settings → Secrets and variables → Actions 新增兩個 secret：
+#    - CRON_SECRET：與 Vercel 專案環境變數 CRON_SECRET 完全相同的值
+#    - APP_BASE_URL：正式環境網址，例如 https://your-project.vercel.app（不要有結尾斜線）
+# 2. 若你是 Vercel Pro 方案，改用 vercel.json 的 crons 設定更頻繁的排程即可，
+#    這支 workflow 可以停用（把下面的 schedule 移除或整個檔案刪除）。
+# 3. 若兩者都啟用也沒關係：refillPracticeQuestionBank 本身是可重入、無狀態的，
+#    重複觸發只會讓題庫更快補滿，不會造成重複發放或資料損壞。
+
+on:
+  schedule:
+    - cron: "*/15 * * * *" # 每 15 分鐘一次（UTC，GitHub Actions 排程也可能有數分鐘延遲，屬正常現象）。
+  workflow_dispatch: {} # 允許在 GitHub Actions 頁面手動觸發，方便測試或緊急補題。
+
+jobs:
+  refill:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 呼叫補題排程端點
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+        run: |
+          if [ -z "$CRON_SECRET" ] || [ -z "$APP_BASE_URL" ]; then
+            echo "尚未設定 CRON_SECRET 或 APP_BASE_URL secret，略過本次執行。"
+            exit 0
+          fi
+          curl --fail --show-error --silent \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            "${APP_BASE_URL}/api/cron/refill-practice-bank"
