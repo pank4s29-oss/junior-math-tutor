@@ -9,11 +9,15 @@ const UUIDS = {
 
 const mocks = vi.hoisted(() => ({
   generateGeminiJson: vi.fn(), getOrCreateAppUser: vi.fn(), assertSupabaseAdmin: vi.fn(), consumeSolveQuota: vi.fn(), refundSolveQuota: vi.fn(), uploadMathPhoto: vi.fn(), getAttachmentForUser: vi.fn(), downloadMathPhoto: vi.fn(), updateAttachmentRecognition: vi.fn(), createConversation: vi.fn(), getConversationForUser: vi.fn(), createMathAttempt: vi.fn(), listRecentAttempts: vi.fn(), buildLearningInsights: vi.fn(), buildPracticeSheet: vi.fn(), listPracticeHistory: vi.fn(), getAttemptForUser: vi.fn(), markAttemptAsMistake: vi.fn(), getMarkedAttemptForPractice: vi.fn(), savePracticeResult: vi.fn(), createEscalation: vi.fn(), listEscalations: vi.fn(), updateEscalationStatus: vi.fn(), getTutorContext: vi.fn(), listApprovedStudentUnits: vi.fn(), getApprovedStudentUnit: vi.fn(), listApprovedTutorModes: vi.fn(), getApprovedTutorMode: vi.fn(), getTeacherUnitByKey: vi.fn(), getTeacherTutorMode: vi.fn(), ensureTeacherUnitForContent: vi.fn(), listTeacherUnits: vi.fn(), listTeacherContents: vi.fn(), listTeacherTutorModes: vi.fn(), listTeacherMaterials: vi.fn(), upsertTeacherTutorMode: vi.fn(), upsertTeacherUnit: vi.fn(), addApprovedContent: vi.fn(), uploadTeacherMaterial: vi.fn(), getBatchQuestionLimit: vi.fn(), updateBatchQuestionLimit: vi.fn(), createBatchSession: vi.fn(), getBatchSessionForUser: vi.fn(), linkAttachmentConversationIfMissing: vi.fn(), listAttachmentsForUser: vi.fn(), renameAttachment: vi.fn(), updateAttachmentTranscriptionForUser: vi.fn(), deleteAttachmentForUser: vi.fn(), listQuotaRefundFailures: vi.fn(), resolveQuotaRefundFailure: vi.fn(),
+  consumePracticeQuota: vi.fn(), refundPracticeQuota: vi.fn(), createPracticeQuestion: vi.fn(), claimPracticeQuestionFromBank: vi.fn(), getPracticeQuestionBankPoolCounts: vi.fn(),
+  generatePracticeQuestionWithRetry: vi.fn(), refillPracticeQuestionBank: vi.fn(),
 }));
 
 vi.mock("../tutor/gemini", () => ({ GEMINI_TUTOR_MODEL: "gemini-3.6-flash", generateGeminiJson: mocks.generateGeminiJson }));
-vi.mock("../tutor/supabaseDb", () => ({ getOrCreateAppUser: mocks.getOrCreateAppUser, assertSupabaseAdmin: mocks.assertSupabaseAdmin, consumeSolveQuota: mocks.consumeSolveQuota, refundSolveQuota: mocks.refundSolveQuota, uploadMathPhoto: mocks.uploadMathPhoto, getAttachmentForUser: mocks.getAttachmentForUser, downloadMathPhoto: mocks.downloadMathPhoto, updateAttachmentRecognition: mocks.updateAttachmentRecognition, createConversation: mocks.createConversation, getConversationForUser: mocks.getConversationForUser, createMathAttempt: mocks.createMathAttempt, listRecentAttempts: mocks.listRecentAttempts, buildLearningInsights: mocks.buildLearningInsights, buildPracticeSheet: mocks.buildPracticeSheet, listPracticeHistory: mocks.listPracticeHistory, getAttemptForUser: mocks.getAttemptForUser, markAttemptAsMistake: mocks.markAttemptAsMistake, getMarkedAttemptForPractice: mocks.getMarkedAttemptForPractice, savePracticeResult: mocks.savePracticeResult, createEscalation: mocks.createEscalation, listEscalations: mocks.listEscalations, updateEscalationStatus: mocks.updateEscalationStatus, createBatchSession: mocks.createBatchSession, getBatchSessionForUser: mocks.getBatchSessionForUser, linkAttachmentConversationIfMissing: mocks.linkAttachmentConversationIfMissing, listAttachmentsForUser: mocks.listAttachmentsForUser, renameAttachment: mocks.renameAttachment, updateAttachmentTranscriptionForUser: mocks.updateAttachmentTranscriptionForUser, deleteAttachmentForUser: mocks.deleteAttachmentForUser, listQuotaRefundFailures: mocks.listQuotaRefundFailures, resolveQuotaRefundFailure: mocks.resolveQuotaRefundFailure }));
+vi.mock("../tutor/supabaseDb", () => ({ getOrCreateAppUser: mocks.getOrCreateAppUser, assertSupabaseAdmin: mocks.assertSupabaseAdmin, consumeSolveQuota: mocks.consumeSolveQuota, refundSolveQuota: mocks.refundSolveQuota, uploadMathPhoto: mocks.uploadMathPhoto, getAttachmentForUser: mocks.getAttachmentForUser, downloadMathPhoto: mocks.downloadMathPhoto, updateAttachmentRecognition: mocks.updateAttachmentRecognition, createConversation: mocks.createConversation, getConversationForUser: mocks.getConversationForUser, createMathAttempt: mocks.createMathAttempt, listRecentAttempts: mocks.listRecentAttempts, buildLearningInsights: mocks.buildLearningInsights, buildPracticeSheet: mocks.buildPracticeSheet, listPracticeHistory: mocks.listPracticeHistory, getAttemptForUser: mocks.getAttemptForUser, markAttemptAsMistake: mocks.markAttemptAsMistake, getMarkedAttemptForPractice: mocks.getMarkedAttemptForPractice, savePracticeResult: mocks.savePracticeResult, createEscalation: mocks.createEscalation, listEscalations: mocks.listEscalations, updateEscalationStatus: mocks.updateEscalationStatus, createBatchSession: mocks.createBatchSession, getBatchSessionForUser: mocks.getBatchSessionForUser, linkAttachmentConversationIfMissing: mocks.linkAttachmentConversationIfMissing, listAttachmentsForUser: mocks.listAttachmentsForUser, renameAttachment: mocks.renameAttachment, updateAttachmentTranscriptionForUser: mocks.updateAttachmentTranscriptionForUser, deleteAttachmentForUser: mocks.deleteAttachmentForUser, listQuotaRefundFailures: mocks.listQuotaRefundFailures, resolveQuotaRefundFailure: mocks.resolveQuotaRefundFailure, consumePracticeQuota: mocks.consumePracticeQuota, refundPracticeQuota: mocks.refundPracticeQuota, createPracticeQuestion: mocks.createPracticeQuestion, claimPracticeQuestionFromBank: mocks.claimPracticeQuestionFromBank, getPracticeQuestionBankPoolCounts: mocks.getPracticeQuestionBankPoolCounts }));
 vi.mock("../tutor/supabaseTeacherDb", () => ({ getTutorContext: mocks.getTutorContext, listApprovedStudentUnits: mocks.listApprovedStudentUnits, getApprovedStudentUnit: mocks.getApprovedStudentUnit, listApprovedTutorModes: mocks.listApprovedTutorModes, getApprovedTutorMode: mocks.getApprovedTutorMode, getTeacherUnitByKey: mocks.getTeacherUnitByKey, getTeacherTutorMode: mocks.getTeacherTutorMode, ensureTeacherUnitForContent: mocks.ensureTeacherUnitForContent, listTeacherUnits: mocks.listTeacherUnits, listTeacherContents: mocks.listTeacherContents, listTeacherTutorModes: mocks.listTeacherTutorModes, listTeacherMaterials: mocks.listTeacherMaterials, upsertTeacherTutorMode: mocks.upsertTeacherTutorMode, upsertTeacherUnit: mocks.upsertTeacherUnit, addApprovedContent: mocks.addApprovedContent, uploadTeacherMaterial: mocks.uploadTeacherMaterial, getBatchQuestionLimit: mocks.getBatchQuestionLimit, updateBatchQuestionLimit: mocks.updateBatchQuestionLimit }));
+vi.mock("../tutor/practiceGeneration", () => ({ generatePracticeQuestionWithRetry: mocks.generatePracticeQuestionWithRetry }));
+vi.mock("../tutor/practiceQuestionBank", () => ({ refillPracticeQuestionBank: mocks.refillPracticeQuestionBank }));
 
 import { tutorRouter, validatePhotoDataUrl } from "./tutor";
 
@@ -27,6 +31,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.getOrCreateAppUser.mockResolvedValue({ id: UUIDS.appUser, role: "student" }); mocks.assertSupabaseAdmin.mockResolvedValue({ id: UUIDS.appUser, role: "admin" }); mocks.consumeSolveQuota.mockResolvedValue({ allowed: true, remaining: 18 }); mocks.getTutorContext.mockResolvedValue({ rules: "先問學生已知條件。", contents: [] }); mocks.listApprovedStudentUnits.mockResolvedValue([]); mocks.listApprovedTutorModes.mockResolvedValue([{ key: "guided", name: "引導解題", description: "先提示" }]); mocks.getApprovedStudentUnit.mockResolvedValue(undefined); mocks.getApprovedTutorMode.mockResolvedValue({ modeKey: "guided", name: "引導解題", teachingInstructions: "先給下一步提示，並保留完整安全格式。", isApproved: true }); mocks.getTeacherUnitByKey.mockResolvedValue(undefined); mocks.createConversation.mockResolvedValue(UUIDS.conversation); mocks.createMathAttempt.mockResolvedValue(UUIDS.attempt); mocks.generateGeminiJson.mockResolvedValue(JSON.stringify(readySolution)); mocks.buildLearningInsights.mockReturnValue({ recentCount: 1, frequentCount: 1, topTags: [{ tag: "移項符號", count: 1 }], recommendation: "先重做。", nextSteps: ["重做"] }); mocks.buildPracticeSheet.mockReturnValue("# 練習單");
   mocks.getAttemptForUser.mockResolvedValue(UUIDS.attempt);
+  mocks.consumePracticeQuota.mockResolvedValue({ allowed: true, remaining: 29 });
+  mocks.claimPracticeQuestionFromBank.mockResolvedValue(undefined);
+  mocks.createPracticeQuestion.mockResolvedValue({ id: UUIDS.practice, createdAt: "2026-09-03T00:00:00.000Z" });
+  mocks.generatePracticeQuestionWithRetry.mockResolvedValue({ ok: true, generation: { question: "解 $x$", keyConcept: "移項", difficultyNote: "單一步驟。" } });
+  mocks.getPracticeQuestionBankPoolCounts.mockResolvedValue([{ grade: "seven", unitKey: "linear-equations", difficulty: "intro", availableCount: 4 }]);
+  mocks.refillPracticeQuestionBank.mockResolvedValue({ combinationsChecked: 36, combinationsBelowTarget: 0, questionsGenerated: 0, questionsFailed: 0, timedOut: false, elapsedMs: 5 });
   mocks.markAttemptAsMistake.mockResolvedValue({ id: UUIDS.attempt, studentMarkedWrong: true, studentMistakeNote: "移項符號", studentMarkedWrongAt: "2026-08-27T00:00:00.000Z" });
   mocks.getMarkedAttemptForPractice.mockResolvedValue({ id: UUIDS.attempt, variationQuestion: readySolution.variationQuestion });
   mocks.ensureTeacherUnitForContent.mockResolvedValue(UUIDS.unit);
@@ -185,5 +195,53 @@ describe("Supabase 國中數學解題路由", () => {
     expect(typeof recentPdf.base64).toBe("string");
     expect(recentPdf.base64.length).toBeGreaterThan(0);
     expect(mocks.listRecentAttempts).toHaveBeenCalledWith(UUIDS.appUser);
+  });
+  it("題庫命中時直接領取題目，秒回不呼叫 Gemini", async () => {
+    mocks.claimPracticeQuestionFromBank.mockResolvedValue({ id: "bank-item-1", questionText: "解 $2x+5=17$", keyConcept: "移項", difficultyNote: "單一步驟。", model: "gemini-3.6-flash" });
+    const result = await caller().generatePractice({ grade: "seven", unitKey: "linear-equations", difficulty: "intro" });
+    expect(result).toMatchObject({ practiceQuestionId: UUIDS.practice, question: "解 $2x+5=17$", remaining: 29 });
+    expect(mocks.claimPracticeQuestionFromBank).toHaveBeenCalledWith({ grade: "seven", unitKey: "linear-equations", difficulty: "intro", userId: UUIDS.appUser });
+    expect(mocks.createPracticeQuestion).toHaveBeenCalledWith(expect.objectContaining({ source: "bank", questionText: "解 $2x+5=17$" }));
+    expect(mocks.generatePracticeQuestionWithRetry).not.toHaveBeenCalled();
+    expect(mocks.consumePracticeQuota).toHaveBeenCalledTimes(1);
+  });
+  it("題庫用盡時退回即時呼叫 Gemini 補題", async () => {
+    mocks.claimPracticeQuestionFromBank.mockResolvedValue(undefined);
+    const result = await caller().generatePractice({ grade: "seven", unitKey: "linear-equations", difficulty: "intro" });
+    expect(result).toMatchObject({ practiceQuestionId: UUIDS.practice, question: "解 $x$", remaining: 29 });
+    expect(mocks.generatePracticeQuestionWithRetry).toHaveBeenCalledTimes(1);
+    expect(mocks.createPracticeQuestion).toHaveBeenCalledWith(expect.objectContaining({ source: "live" }));
+  });
+  it("題庫查詢本身失敗時記錄後仍退回即時生成，不擋住學生出題", async () => {
+    mocks.claimPracticeQuestionFromBank.mockRejectedValueOnce(new Error("從練習題庫領取題目失敗：連線逾時"));
+    const result = await caller().generatePractice({ grade: "seven", unitKey: "linear-equations", difficulty: "intro" });
+    expect(result).toMatchObject({ practiceQuestionId: UUIDS.practice });
+    expect(mocks.generatePracticeQuestionWithRetry).toHaveBeenCalledTimes(1);
+  });
+  it("即時生成也失敗時退還出題額度並回報錯誤", async () => {
+    mocks.claimPracticeQuestionFromBank.mockResolvedValue(undefined);
+    mocks.generatePracticeQuestionWithRetry.mockResolvedValue({ ok: false });
+    await expect(caller().generatePractice({ grade: "seven", unitKey: "linear-equations", difficulty: "intro" })).rejects.toThrow("出題服務暫時無法完成");
+    expect(mocks.refundPracticeQuota).toHaveBeenCalledWith(UUIDS.appUser);
+    expect(mocks.createPracticeQuestion).not.toHaveBeenCalled();
+  });
+  it("即時生成拋出例外時退還出題額度並讓例外原樣往外傳", async () => {
+    mocks.claimPracticeQuestionFromBank.mockResolvedValue(undefined);
+    mocks.generatePracticeQuestionWithRetry.mockRejectedValue(new Error("解題服務暫時繁忙，請在約 10 秒後再試。"));
+    await expect(caller().generatePractice({ grade: "seven", unitKey: "linear-equations", difficulty: "intro" })).rejects.toThrow("解題服務暫時繁忙");
+    expect(mocks.refundPracticeQuota).toHaveBeenCalledWith(UUIDS.appUser);
+  });
+  it("出題額度已用完時直接拒絕，不查詢題庫也不呼叫 Gemini", async () => {
+    mocks.consumePracticeQuota.mockResolvedValue({ allowed: false, remaining: 0, message: "今日出題額度已用完。" });
+    await expect(caller().generatePractice({ grade: "seven", unitKey: "linear-equations", difficulty: "intro" })).rejects.toThrow("今日出題額度已用完");
+    expect(mocks.claimPracticeQuestionFromBank).not.toHaveBeenCalled();
+    expect(mocks.generatePracticeQuestionWithRetry).not.toHaveBeenCalled();
+  });
+  it("管理者可查詢題庫庫存並手動觸發補題，非管理者被拒絕", async () => {
+    const admin = adminCaller();
+    await expect(admin.teacher.listPracticeQuestionBankStats()).resolves.toEqual([{ grade: "seven", unitKey: "linear-equations", difficulty: "intro", availableCount: 4 }]);
+    await expect(admin.teacher.refillPracticeQuestionBank()).resolves.toMatchObject({ questionsGenerated: 0 });
+    expect(mocks.refillPracticeQuestionBank).toHaveBeenCalledWith({ timeBudgetMs: 45_000 });
+    await expect(caller().teacher.listPracticeQuestionBankStats()).rejects.toThrow();
   });
 });
