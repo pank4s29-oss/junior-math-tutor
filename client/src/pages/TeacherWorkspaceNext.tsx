@@ -58,7 +58,14 @@ export default function TeacherWorkspaceNext() {
   const materials = trpc.tutor.teacher.listMaterials.useQuery(undefined, { enabled: isAuthenticated && canManage });
   const batchSettings = trpc.tutor.batchSettings.useQuery(undefined, { enabled: isAuthenticated && canManage, retry: false });
   const escalations = trpc.tutor.teacher.listEscalations.useQuery(undefined, { enabled: isAuthenticated && canManage });
-  const bankStats = trpc.tutor.teacher.listPracticeQuestionBankStats.useQuery(undefined, { enabled: isAuthenticated && canManage });
+  const bankStats = trpc.tutor.teacher.listPracticeQuestionBankStats.useQuery(undefined, {
+    enabled: isAuthenticated && canManage,
+    // 這支查詢失敗幾乎都是「題庫的資料表／view 還沒在 Supabase 上建立」（migration 尚未套用）
+    // 這種非暫時性錯誤，重試 3 次也不會變成功，只會讓主控台多噴 3 次一樣的 500 錯誤、
+    // 也讓某些瀏覽器擴充功能／效能監測腳本在短時間內處理大量失敗的 resource timing
+    // 而額外出錯。跟 batchSettings 一樣關掉重試，失敗就直接顯示錯誤，不要白白重試。
+    retry: false,
+  });
   const unitRows = (units.data ?? []) as TeacherUnit[];
   const caseRows = (escalations.data ?? []) as EscalationCase[];
   const modeRows = (modes.data ?? []) as TeacherMode[];
