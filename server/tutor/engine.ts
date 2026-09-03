@@ -225,6 +225,20 @@ export function hasLeakedDraftArtifacts(text: string): boolean {
   return false;
 }
 
+/**
+ * Gemini 在 JSON 模式下理論上不該加上 Markdown code fence，但 gemini-3.6-flash
+ * 在 thinkingLevel 較低時，偶爾仍會把整段 JSON 包在 ```json ... ``` 或前後夾帶
+ * 空白／換行裡送回來。JSON.parse 對這種內容一律會直接拋錯，導致
+ * parsePracticeGeneration／parseTutorSolution 每次都落回空白 fallback，
+ * 看起來就像「出題／解題服務一直失敗」，但其實模型內容本身是可用的。
+ * 這裡在真正呼叫 JSON.parse 之前，先去除最外層的 code fence 與前後空白。
+ */
+function stripJsonCodeFence(raw: string): string {
+  const trimmed = raw.trim();
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return (fenced ? fenced[1] : trimmed).trim();
+}
+
 export function parsePracticeGeneration(content: unknown): PracticeGeneration {
   const fallback: PracticeGeneration = {
     question: "",
@@ -233,7 +247,7 @@ export function parsePracticeGeneration(content: unknown): PracticeGeneration {
   };
   if (typeof content !== "string") return fallback;
   try {
-    const parsed = JSON.parse(content) as Partial<PracticeGeneration>;
+    const parsed = JSON.parse(stripJsonCodeFence(content)) as Partial<PracticeGeneration>;
     const question = clip(String(parsed?.question ?? ""), 2000);
     if (!question) return fallback;
     return {
@@ -274,7 +288,7 @@ export function parseTutorSolution(content: unknown): TutorSolution {
 
   if (typeof content !== "string") return fallback;
   try {
-    const parsed = JSON.parse(content) as Partial<TutorSolution>;
+    const parsed = JSON.parse(stripJsonCodeFence(content)) as Partial<TutorSolution>;
     if (!parsed || !["ready", "clarification"].includes(String(parsed.status))) return fallback;
     return {
       ...fallback,
