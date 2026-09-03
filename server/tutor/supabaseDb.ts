@@ -424,14 +424,68 @@ export async function listPracticeHistory(userId: string) {
 export async function createPracticeQuestion(input: {
   userId: string; grade: Grade; unitKey: string; unitLabel: string; difficulty: "intro" | "standard" | "challenge";
   questionText: string; keyConcept: string; difficultyNote: string; model: string;
+  /** "bank"：從背景排程預先生成的題庫立即領取；"live"：即時呼叫 Gemini 生成。預設 "live"。 */
+  source?: "live" | "bank";
 }) {
   const { data, error } = await supabase().from("practice_questions").insert({
     user_id: input.userId, grade: input.grade, unit_key: input.unitKey, unit_label: input.unitLabel,
     difficulty: input.difficulty, question_text: input.questionText, key_concept: input.keyConcept,
-    difficulty_note: input.difficultyNote, model: input.model,
+    difficulty_note: input.difficultyNote, model: input.model, source: input.source ?? "live",
   }).select("id, created_at").single();
   fail(error, "保存練習題");
   return { id: String(data.id), createdAt: String(data.created_at) };
+}
+
+/**
+ * 從背景排程預先生成的題庫（practice_question_bank）原子領取一題：
+ * 呼叫 claim_practice_question_bank_item RPC，內部以 FOR UPDATE SKIP LOCKED
+ * 確保多個學生同時出題時不會領到同一題，領到後立即把該題標記為已發放
+ * （從可用池中移除），因此每一題只會發放給一位學生一次。
+ * 題庫用盡（該組合沒有可用題目）時回傳 undefined，由呼叫端退回即時生成。
+ */
+export async function claimPracticeQuestionFromBank(input: {
+  grade: Grade; unitKey: string; difficulty: "intro" | "standard" | "challenge"; userId: string;
+}) {
+  const { data, error } = await supabase().rpc("claim_practice_question_bank_item", {
+    p_grade: input.grade, p_unit_key: input.unitKey, p_difficulty: input.difficulty, p_user_id: input.userId,
+  });
+  fail(error, "從練習題庫領取題目");
+  const row = (Array.isArray(data) ? data[0] : data) as
+    | { id: string; question_text: string; key_concept: string | null; difficulty_note: string | null; model: string | null }
+    | undefined
+    | null;
+  if (!row) return undefined;
+  return {
+    id: String(row.id), questionText: String(row.question_text),
+    keyConcept: String(row.key_concept ?? ""), difficultyNote: String(row.difficulty_note ?? ""),
+    model: String(row.model ?? ""),
+  };
+}
+
+/** 背景補題排程寫入一題新的題庫存貨；供學生下次出題時以 claimPracticeQuestionFromBank 領取。 */
+export async function insertPracticeQuestionBankItem(input: {
+  grade: Grade; unitKey: string; unitLabel: string; difficulty: "intro" | "standard" | "challenge";
+  questionText: string; keyConcept: string; difficultyNote: string; model: string;
+}) {
+  const { error } = await supabase().from("practice_question_bank").insert({
+    grade: input.grade, unit_key: input.unitKey, unit_label: input.unitLabel, difficulty: input.difficulty,
+    question_text: input.questionText, key_concept: input.keyConcept, difficulty_note: input.difficultyNote,
+    model: input.model,
+  });
+  fail(error, "寫入練習題庫");
+}
+
+/** 讀取每個「年級＋單元＋難度」組合目前題庫的可用（尚未發放）題目數，供補題排程判斷該補哪些組合。 */
+export async function getPracticeQuestionBankPoolCounts(): Promise<Array<{
+  grade: Grade; unitKey: string; difficulty: "intro" | "standard" | "challenge"; availableCount: number;
+}>> {
+  const { data, error } = await supabase().from("practice_question_bank_pool_stats")
+    .select("grade, unit_key, difficulty, available_count");
+  fail(error, "讀取練習題庫庫存統計");
+  return (data ?? []).map((row: any) => ({
+    grade: row.grade as Grade, unitKey: String(row.unit_key),
+    difficulty: row.difficulty as "intro" | "standard" | "challenge", availableCount: Number(row.available_count),
+  }));
 }
 
 export async function listPracticeQuestions(userId: string) {
