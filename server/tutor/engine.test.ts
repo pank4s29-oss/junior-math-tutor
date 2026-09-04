@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildTutorInstructions, formatTutorReply, parseTutorSolution } from "./engine";
+import { buildTutorInstructions, formatTutorReply, hasLeakedDraftArtifacts, parseTutorSolution } from "./engine";
 import { evaluateSolveQuota } from "./db";
 
 describe("國中數學受控解題引擎", () => {
@@ -57,5 +57,27 @@ describe("國中數學受控解題引擎", () => {
     expect(evaluateSolveQuota(undefined, now)).toMatchObject({ allowed: true, remaining: 19, nextRequestCount: 1 });
     expect(evaluateSolveQuota({ requestCount: 4, lastRequestedAt: new Date("2026-08-27T09:59:58.000Z") }, now)).toMatchObject({ allowed: false, remaining: 16 });
     expect(evaluateSolveQuota({ requestCount: 20, lastRequestedAt: new Date("2026-08-27T09:40:00.000Z") }, now)).toMatchObject({ allowed: false, remaining: 0 });
+  });
+});
+
+describe("hasLeakedDraftArtifacts", () => {
+  it("抓出整段繁體中文自我修正草稿被塞進同一組 $ 裡（截圖裡的 \\le／\\ne 反覆猶豫）", () => {
+    const leaked = "已知 A = 2^{20} × 5^{18}。若將 A 表示成科學記號 a × 10^n，其中$1\num \\ne 10改為1\node \\ne換成1\nle即1\nle a < 10時1\nle正確為1\nle不對是1\nle不，標籤為1\nle不，是1\nle再檢查：1\nle錯，LaTeX是 ≤。已知 A = 2^{20} \\times 5^{18}。若將 A 表示成科學記號 a \\times 10^n，其中1 \\le a < 10 且 n 為整數。求 a + n$的值。";
+    expect(hasLeakedDraftArtifacts(leaked)).toBe(true);
+  });
+
+  it("抓出繁體中文的猶豫／自我修正措辭，即使沒有壞掉的 $ 結構", () => {
+    expect(hasLeakedDraftArtifacts("不對，應該用 $\\le$ 才對，答案是 3。")).toBe(true);
+    expect(hasLeakedDraftArtifacts("等一下，讓我再檢查：答案其實是 5。")).toBe(true);
+  });
+
+  it("正常定稿的題目（含較長的合法 $ 算式）不會被誤判為洩漏", () => {
+    const clean = "已知 $A = 2^{20} \\times 5^{18}$。若將 A 表示成科學記號 $a \\times 10^n$，其中 $1 \\le a < 10$ 且 $n$ 為整數，求 $a + n$ 的值。";
+    expect(hasLeakedDraftArtifacts(clean)).toBe(false);
+  });
+
+  it("正常的教學用語（例如把單位換算成另一個單位）不會被誤判為自我修正措辭", () => {
+    expect(hasLeakedDraftArtifacts("請先把公升換成毫升，再進行比較。")).toBe(false);
+    expect(hasLeakedDraftArtifacts("將分數改為最簡分數後再相加。")).toBe(false);
   });
 });
