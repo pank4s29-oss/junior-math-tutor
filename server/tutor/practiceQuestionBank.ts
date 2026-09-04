@@ -58,11 +58,27 @@ function poolCountKey(item: { grade: Grade; unitKey: string; difficulty: Practic
 }
 
 /**
- * 同時間最多幾個補題呼叫平行進行。補題共用學生即時解題/出題的同一把
- * GEMINI_API_KEY，並行度太高會跟學生當下的即時請求搶配額、拉高彼此的延遲；
- * 3 是在「同一次執行盡量多補幾題」與「不過度搶占共用配額」之間的折衷值。
+ * 同時間最多幾個補題呼叫平行進行。
+ *
+ * Gemini API 免費層級的 RPM（每分鐘請求數）通常只有 10～15，而且是「整個
+ * 專案共用」，不是分金鑰各自計算——學生即時解題、即時出題、背景補題全部
+ * 搶同一份額度。並行度調高看似能在同一次執行補更多題，但也更容易瞬間衝出
+ * RPM 上限，反而讓當下正在使用中的學生撞到 429。這裡改回序列處理（一次一
+ * 個），把「同一次執行盡量多補幾題」的目標讓給更保守的
+ * MAX_GEMINI_CALLS_PER_RUN，並靠 GitHub Actions 頻繁但每次量少的排程來補足
+ * 總補題速度，而不是靠單次執行的爆發並行。
  */
-const REFILL_CONCURRENCY = 3;
+const REFILL_CONCURRENCY = 1;
+
+/**
+ * 單次執行最多呼叫幾次 Gemini，不論還有多少組合缺貨。這是背景補題「不跟學生
+ * 搶額度」最主要的防線：假設 RPM 上限抓保守一點（10～15），單次執行最多
+ * 4 次呼叫，搭配 GitHub Actions 每 10 分鐘觸發一次，背景補題整體最多也只占用
+ * 約 24 requests/小時，其餘額度留給即時解題／出題。題庫補不滿的組合，下一次
+ * 執行會接著補，不會因為這個上限而卡住——只是分散在更多次執行完成，而不是
+ * 一次全部補齊。
+ */
+const MAX_GEMINI_CALLS_PER_RUN = 4;
 
 /**
  * 背景補題主流程：依「目前庫存最少的組合優先」排序，把所有還沒補滿的組合展開成
@@ -102,8 +118,12 @@ export async function refillPracticeQuestionBank(options?: { timeBudgetMs?: numb
 
   // 展開成扁平的工作清單：同一個組合若還缺 3 題，就會在清單裡出現 3 次獨立的工作。
   // 用來源清單依「庫存最少優先」的順序保留，讓並行 worker 仍然大致依這個優先順序消化。
-  const tasks = deficits.flatMap(({ combo, available }) =>
-    Array.from({ length: Math.min(BANK_TARGET_POOL_SIZE - available, MAX_NEW_QUESTIONS_PER_COMBINATION_PER_RUN) }, () => combo));
+  // 再套用 MAX_GEMINI_CALLS_PER_RUN 總量上限：即使缺口很大，單次執行也只處理前面
+  // 這幾個最急迫的組合，其餘留給下一次執行，避免一次把整份共用額度用光。
+  const tasks = deficits
+    .flatMap(({ combo, available }) =>
+      Array.from({ length: Math.min(BANK_TARGET_POOL_SIZE - available, MAX_NEW_QUESTIONS_PER_COMBINATION_PER_RUN) }, () => combo))
+    .slice(0, MAX_GEMINI_CALLS_PER_RUN);
 
   let nextTaskIndex = 0;
   let timedOut = false;
