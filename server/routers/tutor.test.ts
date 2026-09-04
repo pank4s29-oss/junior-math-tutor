@@ -44,7 +44,7 @@ beforeEach(() => {
   mocks.consumePracticeQuota.mockResolvedValue({ allowed: true, remaining: 29 });
   mocks.claimPracticeQuestionFromBank.mockResolvedValue(undefined);
   mocks.createPracticeQuestion.mockResolvedValue({ id: UUIDS.practice, createdAt: "2026-09-03T00:00:00.000Z" });
-  mocks.generatePracticeQuestionWithRetry.mockResolvedValue({ ok: true, generation: { question: "解 $x$", keyConcept: "移項", difficultyNote: "單一步驟。" } });
+  mocks.generatePracticeQuestionWithRetry.mockResolvedValue({ ok: true, generation: { question: "解 $x$", keyConcept: "移項", difficultyNote: "單一步驟。" }, extras: [] });
   mocks.getPracticeQuestionBankPoolCounts.mockResolvedValue([{ grade: "seven", unitKey: "linear-equations", difficulty: "intro", availableCount: 4 }]);
   mocks.listRecentBankQuestionTexts.mockResolvedValue([]);
   mocks.refillPracticeQuestionBank.mockResolvedValue({ combinationsChecked: 36, combinationsBelowTarget: 0, questionsGenerated: 0, questionsFailed: 0, timedOut: false, elapsedMs: 5 });
