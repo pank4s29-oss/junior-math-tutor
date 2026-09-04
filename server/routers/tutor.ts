@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { CORE_UNITS, GRADES, PRACTICE_DIFFICULTIES, type Grade } from "../../shared/mathCurriculum";
-import { buildTutorInstructions, formatTutorReply, parseTutorSolution, solutionHasLeakedDraftArtifacts, tutorResponseFormat } from "../tutor/engine";
+import { buildTutorInstructions, formatTutorReply, hasLeakedDraftArtifacts, parseTutorSolution, solutionHasLeakedDraftArtifacts, tutorResponseFormat } from "../tutor/engine";
 import { buildPracticeSheetDocx, buildPracticeSheetPdf } from "../tutor/exportDocuments";
 import { GEMINI_TUTOR_MODEL, GeminiTemporaryUnavailableError, generateGeminiJson } from "../tutor/gemini";
 import { generatePracticeQuestionWithRetry } from "../tutor/practiceGeneration";
@@ -269,12 +269,25 @@ export const tutorRouter = router({
         grade: input.grade, unitKey: input.unitKey, difficulty: input.difficulty, userId: appUser.id,
       });
       if (bankItem) {
-        const saved = await tutorDb.createPracticeQuestion({
-          userId: appUser.id, grade: input.grade, unitKey: input.unitKey, unitLabel, difficulty: input.difficulty,
-          questionText: bankItem.questionText, keyConcept: bankItem.keyConcept, difficultyNote: bankItem.difficultyNote,
-          model: bankItem.model || GEMINI_TUTOR_MODEL, source: "bank",
+        // 題庫裡可能存有 hasLeakedDraftArtifacts 偵測規則更新「之前」就已經寫入、
+        // 帶有殘缺 LaTeX 或洩漏草稿的舊題目（例如反覆猶豫 \le／\ne 的整段中文
+        // 草稿被誤存進題庫）。原子領取的 RPC 已經把這題標記為已消耗，沒辦法
+        // 「放回去」；與其把壞掉的內容硬塞給學生，不如當這次領取沒有拿到可用
+        // 題目，直接退回下面的即時生成路徑重新換一題乾淨的。
+        const isBankItemClean = !hasLeakedDraftArtifacts(bankItem.questionText)
+          && !hasLeakedDraftArtifacts(bankItem.keyConcept)
+          && !hasLeakedDraftArtifacts(bankItem.difficultyNote);
+        if (isBankItemClean) {
+          const saved = await tutorDb.createPracticeQuestion({
+            userId: appUser.id, grade: input.grade, unitKey: input.unitKey, unitLabel, difficulty: input.difficulty,
+            questionText: bankItem.questionText, keyConcept: bankItem.keyConcept, difficultyNote: bankItem.difficultyNote,
+            model: bankItem.model || GEMINI_TUTOR_MODEL, source: "bank",
+          });
+          return { practiceQuestionId: saved.id, question: bankItem.questionText, keyConcept: bankItem.keyConcept, difficultyNote: bankItem.difficultyNote, remaining: quota.remaining };
+        }
+        console.error("Discarded corrupted practice question bank item, falling back to live generation", {
+          grade: input.grade, unitKey: input.unitKey, difficulty: input.difficulty, bankItemId: bankItem.id,
         });
-        return { practiceQuestionId: saved.id, question: bankItem.questionText, keyConcept: bankItem.keyConcept, difficultyNote: bankItem.difficultyNote, remaining: quota.remaining };
       }
     } catch (error) {
       console.error("Practice question bank claim failed, falling back to live generation", {
