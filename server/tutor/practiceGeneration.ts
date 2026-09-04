@@ -1,8 +1,8 @@
 import type { Grade, PracticeDifficulty } from "../../shared/mathCurriculum";
 import { PRACTICE_DIFFICULTY_DESCRIPTIONS, PRACTICE_DIFFICULTY_LABELS } from "../../shared/mathCurriculum";
 import {
-  buildPracticeGenerationInstructions, hasLeakedDraftArtifacts, parsePracticeGeneration,
-  practiceGenerationResponseFormat, type PracticeGeneration,
+  buildPracticeGenerationBatchInstructions, hasLeakedDraftArtifacts, parsePracticeGenerationBatch,
+  practiceGenerationBatchResponseFormat, type PracticeGeneration,
 } from "./engine";
 import { GeminiTemporaryUnavailableError, generateGeminiJson } from "./gemini";
 
@@ -22,11 +22,20 @@ export type PracticeGenerationTarget = {
 };
 
 export type PracticeGenerationOutcome =
-  | { ok: true; generation: PracticeGeneration }
+  | { ok: true; generation: PracticeGeneration; extras: PracticeGeneration[] }
   | { ok: false };
 
 /**
- * 呼叫 Gemini 產生一道全新練習題，內建重試與時間預算保護。
+ * 一次向 Gemini 要求幾道題目。呼叫端（即時出題）只需要用到其中一題，
+ * 其餘的透過 outcome.extras 直接回存題庫（見 server/routers/tutor.ts），
+ * 讓同一次 API 呼叫的配額換到多題可用內容，而不是 1 次呼叫＝1 題。
+ * 背景補題排程（practiceQuestionBank.ts）目前仍是逐一 task 呼叫這支函式，
+ * 但同樣會受惠於 extras：只要清潔度檢查通過，第一題以外的題目也一併入庫。
+ */
+const QUESTIONS_PER_CALL = 3;
+
+/**
+ * 呼叫 Gemini 產生全新練習題，內建重試與時間預算保護。
  *
  * 這段邏輯原本內嵌在 generatePractice tRPC procedure 裡；現在抽成獨立函式，
  * 讓兩個呼叫端共用同一套重試／清潔度檢查規則，不再各自維護、逐漸分歧：
@@ -40,7 +49,10 @@ export async function generatePracticeQuestionWithRetry(
   target: PracticeGenerationTarget,
   options?: { timeBudgetMs?: number },
 ): Promise<PracticeGenerationOutcome> {
-  const instruction = buildPracticeGenerationInstructions({
+  // engine.ts 已改為「一次呼叫、多題一起換」的批次版 instruction／schema／parser
+  // （見 buildPracticeGenerationBatchInstructions 上方註解）；這裡固定用
+  // QUESTIONS_PER_CALL 呼叫同一套批次機制，讓每次 Gemini 呼叫的配額換到多題可用內容。
+  const instruction = buildPracticeGenerationBatchInstructions({
     grade: target.grade,
     unitLabel: target.unitLabel,
     difficultyLabel: PRACTICE_DIFFICULTY_LABELS[target.difficulty],
@@ -48,6 +60,7 @@ export async function generatePracticeQuestionWithRetry(
     teacherRules: target.teacherRules,
     approvedContext: target.approvedContext,
     recentQuestions: target.recentQuestions,
+    count: QUESTIONS_PER_CALL,
   });
   const prompt = `請為「${target.unitLabel}」出一題全新的「${PRACTICE_DIFFICULTY_LABELS[target.difficulty]}」難度練習題。`;
 
@@ -77,7 +90,7 @@ export async function generatePracticeQuestionWithRetry(
         // 思考型模型會先消耗部分輸出 token 在內部推理／草稿，額度太低容易讓最終
         // JSON 被截斷、或逼得模型把草稿直接留在字串欄位裡，但額度也不能無限拉高，
         // 否則單次呼叫本身就可能拖過剩餘的時間預算。
-        responseJsonSchema: practiceGenerationResponseFormat.json_schema.schema, maxOutputTokens: 4096,
+        responseJsonSchema: practiceGenerationBatchResponseFormat.json_schema.schema, maxOutputTokens: 4096 * QUESTIONS_PER_CALL,
         // 只有第一次嘗試、且剩餘時間還算充裕時才用 "medium" 換取更穩定的輸出品質；
         // 之後的重試一律降回 "low"，確保能在剩餘的時間預算內完成。
         thinkingLevel: attempt === 1 && remainingMs >= 25_000 ? "medium" : "low",
@@ -106,12 +119,20 @@ export async function generatePracticeQuestionWithRetry(
       continue;
     }
 
-    const parsed = parsePracticeGeneration(content);
-    const isClean = Boolean(parsed.question)
-      && !hasLeakedDraftArtifacts(parsed.question)
-      && !hasLeakedDraftArtifacts(parsed.keyConcept)
-      && !hasLeakedDraftArtifacts(parsed.difficultyNote);
-    if (isClean) return { ok: true, generation: parsed };
+    // 批次版 parser 回傳陣列；第一筆乾淨才代表這次嘗試成功並回傳給呼叫端，
+    // 其餘題目個別做清潔度檢查後，乾淨的那些以 extras 回傳讓呼叫端直接回存題庫——
+    // 單一題目殘缺（例如某一題 LaTeX 沒收尾）不該連累同一批裡其他乾淨的題目。
+    const batch = parsePracticeGenerationBatch(content, QUESTIONS_PER_CALL);
+    const [parsed, ...rest] = batch;
+    const isCleanGeneration = (item: PracticeGeneration | undefined): item is PracticeGeneration =>
+      item !== undefined
+      && Boolean(item.question)
+      && !hasLeakedDraftArtifacts(item.question)
+      && !hasLeakedDraftArtifacts(item.keyConcept)
+      && !hasLeakedDraftArtifacts(item.difficultyNote);
+    if (isCleanGeneration(parsed)) {
+      return { ok: true, generation: parsed, extras: rest.filter(isCleanGeneration) };
+    }
     console.error(`Practice generation attempt ${attempt} produced unusable content`, {
       grade: target.grade, unitKey: target.unitKey, difficulty: target.difficulty, contentPreview: content.slice(0, 500),
     });
