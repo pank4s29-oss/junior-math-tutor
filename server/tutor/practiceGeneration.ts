@@ -13,6 +13,8 @@ export type PracticeGenerationTarget = {
   difficulty: PracticeDifficulty;
   teacherRules: string;
   approvedContext: Array<{ title: string; body: string; type: string }>;
+  /** 同單元＋同難度最近已出過的題目文字，用來提醒模型避開重複題型，提升多樣性。 */
+  recentQuestions?: string[];
 };
 
 export type PracticeGenerationOutcome =
@@ -41,6 +43,7 @@ export async function generatePracticeQuestionWithRetry(
     difficultyGuidance: PRACTICE_DIFFICULTY_DESCRIPTIONS[target.difficulty],
     teacherRules: target.teacherRules,
     approvedContext: target.approvedContext,
+    recentQuestions: target.recentQuestions,
   });
   const prompt = `請為「${target.unitLabel}」出一題全新的「${PRACTICE_DIFFICULTY_LABELS[target.difficulty]}」難度練習題。`;
 
