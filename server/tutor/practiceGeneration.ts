@@ -4,7 +4,11 @@ import {
   buildPracticeGenerationInstructions, hasLeakedDraftArtifacts, parsePracticeGeneration,
   practiceGenerationResponseFormat, type PracticeGeneration,
 } from "./engine";
-import { generateGeminiJson } from "./gemini";
+import { GeminiTemporaryUnavailableError, generateGeminiJson } from "./gemini";
+
+function sleep(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 export type PracticeGenerationTarget = {
   grade: Grade;
@@ -65,18 +69,43 @@ export async function generatePracticeQuestionWithRetry(
       });
       break;
     }
-    const content = await generateGeminiJson({
-      instruction, prompt,
-      // 思考型模型會先消耗部分輸出 token 在內部推理／草稿，額度太低容易讓最終
-      // JSON 被截斷、或逼得模型把草稿直接留在字串欄位裡，但額度也不能無限拉高，
-      // 否則單次呼叫本身就可能拖過剩餘的時間預算。
-      responseJsonSchema: practiceGenerationResponseFormat.json_schema.schema, maxOutputTokens: 4096,
-      // 只有第一次嘗試、且剩餘時間還算充裕時才用 "medium" 換取更穩定的輸出品質；
-      // 之後的重試一律降回 "low"，確保能在剩餘的時間預算內完成。
-      thinkingLevel: attempt === 1 && remainingMs >= 25_000 ? "medium" : "low",
-      // 留 2 秒緩衝給 JSON 解析與後續處理，避免逾時控制本身踩線。
-      timeoutMs: Math.max(MIN_ATTEMPT_BUDGET_MS, remainingMs - 2_000),
-    });
+
+    let content: string;
+    try {
+      content = await generateGeminiJson({
+        instruction, prompt,
+        // 思考型模型會先消耗部分輸出 token 在內部推理／草稿，額度太低容易讓最終
+        // JSON 被截斷、或逼得模型把草稿直接留在字串欄位裡，但額度也不能無限拉高，
+        // 否則單次呼叫本身就可能拖過剩餘的時間預算。
+        responseJsonSchema: practiceGenerationResponseFormat.json_schema.schema, maxOutputTokens: 4096,
+        // 只有第一次嘗試、且剩餘時間還算充裕時才用 "medium" 換取更穩定的輸出品質；
+        // 之後的重試一律降回 "low"，確保能在剩餘的時間預算內完成。
+        thinkingLevel: attempt === 1 && remainingMs >= 25_000 ? "medium" : "low",
+        // 留 2 秒緩衝給 JSON 解析與後續處理，避免逾時控制本身踩線。
+        timeoutMs: Math.max(MIN_ATTEMPT_BUDGET_MS, remainingMs - 2_000),
+      });
+    } catch (error) {
+      // 這是這一輪修正的關鍵：Gemini 免費層級的 RPM（每分鐘請求數）通常只有 10～15，
+      // 而且是整個專案共用，不是分金鑰各自計算。背景補題、多個學生同時出題／解題
+      // 全部搶同一份額度，撞到 429（RESOURCE_EXHAUSTED）是常態、不是例外狀況。
+      // 先前這裡完全沒有 try/catch，429 會直接往外拋、跳過整個重試迴圈——只要第一次
+      // 呼叫遇到瞬間的額度尖峰，學生連第一題都還沒生成就會看到「系統繁忙」。
+      // 現在遇到可辨識的暫時性錯誤時，尊重伺服器建議的等待秒數（retryAfterSeconds）
+      // 退避後繼續下一輪迴圈，而不是把最後一次嘗試的機會浪費在完全不重試上。
+      const isTransient = error instanceof GeminiTemporaryUnavailableError;
+      console.error(`Practice generation attempt ${attempt} failed`, {
+        grade: target.grade, unitKey: target.unitKey, difficulty: target.difficulty,
+        transient: isTransient, message: error instanceof Error ? error.message : "unknown error",
+      });
+      if (!isTransient) throw error; // 不是可重試的暫時性錯誤（例如金鑰未設定），沒有重試的意義，直接往外拋。
+      if (attempt === MAX_ATTEMPTS) throw error; // 已經是最後一次嘗試，重試也沒有意義了，把原始錯誤往外拋讓呼叫端處理退款。
+
+      const remainingAfterFailure = TIME_BUDGET_MS - (Date.now() - startedAt);
+      const backoffMs = Math.min((error.retryAfterSeconds ?? 2) * 1000, Math.max(0, remainingAfterFailure - MIN_ATTEMPT_BUDGET_MS));
+      if (backoffMs > 0) await sleep(backoffMs);
+      continue;
+    }
+
     const parsed = parsePracticeGeneration(content);
     const isClean = Boolean(parsed.question)
       && !hasLeakedDraftArtifacts(parsed.question)
