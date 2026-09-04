@@ -9,7 +9,7 @@ vi.mock("@google/genai", () => ({
   GoogleGenAI: mocks.GoogleGenAI,
 }));
 
-import { GEMINI_TUTOR_MODEL, generateGeminiJson, repairBrokenJsonEscapes } from "./gemini";
+import { GEMINI_TUTOR_FALLBACK_MODEL, GEMINI_TUTOR_MODEL, generateGeminiJson, repairBrokenJsonEscapes } from "./gemini";
 
 describe("Gemini 結構化數學解題相容層", () => {
   beforeEach(() => {
@@ -61,6 +61,44 @@ describe("Gemini 結構化數學解題相容層", () => {
       responseJsonSchema: { type: "object" },
       maxOutputTokens: 400,
     })).rejects.toThrow("約 10 秒後再試");
+  });
+
+  it("主要模型撞到 429／配額用盡時，同一次呼叫會立即改用備援模型（gemini-3.7-flash）重試，不需要呼叫端自己再試一次", async () => {
+    mocks.generateContent
+      .mockRejectedValueOnce(new Error('{"error":{"code":429,"status":"RESOURCE_EXHAUSTED"}}'))
+      .mockResolvedValueOnce({ text: '{"status":"ready"}' });
+    await expect(generateGeminiJson({
+      instruction: "只輸出 JSON。",
+      prompt: "解 x = 1。",
+      responseJsonSchema: { type: "object" },
+      maxOutputTokens: 400,
+    })).resolves.toBe('{"status":"ready"}');
+    expect(mocks.generateContent).toHaveBeenCalledTimes(2);
+    expect(mocks.generateContent.mock.calls[0][0]).toEqual(expect.objectContaining({ model: GEMINI_TUTOR_MODEL }));
+    expect(mocks.generateContent.mock.calls[1][0]).toEqual(expect.objectContaining({ model: GEMINI_TUTOR_FALLBACK_MODEL }));
+  });
+
+  it("兩個模型都撞到 429／配額用盡時，才真正回報繁忙（備援不是無限重試）", async () => {
+    mocks.generateContent.mockRejectedValue(new Error('{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","details":[{"retryDelay":"9.2s"}]}}'));
+    await expect(generateGeminiJson({
+      instruction: "只輸出 JSON。",
+      prompt: "解 x = 1。",
+      responseJsonSchema: { type: "object" },
+      maxOutputTokens: 400,
+    })).rejects.toThrow("約 10 秒後再試");
+    expect(mocks.generateContent).toHaveBeenCalledTimes(2);
+  });
+
+  it("逾時／中止類錯誤不會觸發備援模型，避免總延遲翻倍超過呼叫端的時間預算", async () => {
+    mocks.generateContent.mockRejectedValue(new Error("The operation was aborted"));
+    await expect(generateGeminiJson({
+      instruction: "只輸出 JSON。",
+      prompt: "解 x = 1。",
+      responseJsonSchema: { type: "object" },
+      maxOutputTokens: 400,
+      timeoutMs: 5000,
+    })).rejects.toThrow("解題服務暫時繁忙");
+    expect(mocks.generateContent).toHaveBeenCalledTimes(1);
   });
 
   it("修正 Gemini 把 LaTeX 巨集反斜線寫成單一反斜線、被 JSON 逃脫規則吃成控制字元的殘缺巨集（\\times、\\frac、\\text、\\right）", async () => {
