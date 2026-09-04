@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { trpc } from "@/lib/trpc";
 import { CORE_UNITS, GRADE_LABELS, PRACTICE_DIFFICULTIES, PRACTICE_DIFFICULTY_LABELS, type Grade, type PracticeDifficulty } from "../../../shared/mathCurriculum";
-import { AlertTriangle, ArrowLeft, BadgeCheck, BookOpenCheck, Check, ClipboardCheck, Database, FilePlus2, FileUp, GraduationCap, Layers3, Loader2, LogOut, PenLine, Plus, RefreshCw, Save, SlidersHorizontal } from "lucide-react";
+import { AlertTriangle, ArrowLeft, BadgeCheck, BookOpenCheck, Check, ClipboardCheck, Database, Download, FilePlus2, FileSpreadsheet, FileUp, GraduationCap, Layers3, Loader2, LogOut, PenLine, Plus, RefreshCw, Save, SlidersHorizontal, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Link } from "wouter";
@@ -23,10 +23,19 @@ type TeacherMode = { id: string; modeKey: string; name: string; description: str
 type TeacherMaterial = { id: string; title: string; originalName: string; mimeType: string; byteSize: number; extractedText: string; isApproved: boolean; version: number; unitName: string; grade: Grade | null };
 type EscalationCase = { id: string; attemptId: string; reason: "wrong_answer" | "unclear_photo" | "teacher_help" | "safety_concern"; detail: string | null; priority: string; status: "new" | "reviewing" | "resolved" };
 type BankStatRow = { grade: Grade; unitKey: string; difficulty: "intro" | "standard" | "challenge"; availableCount: number };
+type TeacherPracticeQuestion = { id: string; grade: Grade; unitKey: string; unitLabel: string; difficulty: PracticeDifficulty; questionText: string; keyConcept: string; difficultyNote: string; createdAt: string };
 const BANK_TARGET_POOL_SIZE = 6; // 需與 server/tutor/practiceQuestionBank.ts 的 BANK_TARGET_POOL_SIZE 一致，僅用於前端顯示提示，不影響實際補題邏輯。
 
 function readFileAsDataUrl(file: File) { return new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("教材檔案讀取失敗。")); reader.onerror = () => reject(new Error("教材檔案讀取失敗。")); reader.readAsDataURL(file); }); }
+function readFileAsText(file: File) { return new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("題目檔案讀取失敗。")); reader.onerror = () => reject(new Error("題目檔案讀取失敗。")); reader.readAsText(file, "utf-8"); }); }
 function materialType(file: File) { if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) return "application/pdf" as const; if (file.type === "text/markdown" || /\.md$/i.test(file.name)) return "text/markdown" as const; return "text/plain" as const; }
+function downloadBankQuestionCsvTemplate() {
+  const csv = "\uFEFF難度,題目,關鍵觀念,難度說明\n入門,\"解 $3x - 7 = 11$，求 $x$。\",移項與等量公理,單一步驟即可求解。\n進階,\"已知 $A = 2^{20} \\times 5^{18}$，求 A 的科學記號表示法。\",科學記號,\n";
+  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  const link = document.createElement("a");
+  link.href = url; link.download = "題庫匯入範本.csv"; link.click();
+  URL.revokeObjectURL(url);
+}
 
 export default function TeacherWorkspaceNext() {
   const { user, loading, isAuthenticated, logout } = useAuth();
@@ -55,6 +64,8 @@ export default function TeacherWorkspaceNext() {
   const [bankQuestionText, setBankQuestionText] = useState("");
   const [bankKeyConcept, setBankKeyConcept] = useState("");
   const [bankDifficultyNote, setBankDifficultyNote] = useState("");
+  const [bankImportFile, setBankImportFile] = useState<File | null>(null);
+  const [bankImportResult, setBankImportResult] = useState<{ imported: number; skipped: Array<{ line: number; reason: string }>; totalRows: number } | null>(null);
 
   const units = trpc.tutor.teacher.listUnits.useQuery(undefined, { enabled: isAuthenticated && canManage });
   const contents = trpc.tutor.teacher.listContents.useQuery(undefined, { enabled: isAuthenticated && canManage });
@@ -86,6 +97,11 @@ export default function TeacherWorkspaceNext() {
     return [...core, ...custom];
   }), [unitRows]);
   const selectedContentUnit = contentUnitOptions.find(item => `${item.grade}:${item.unitKey}` === contentUnitValue) ?? contentUnitOptions[0];
+  const teacherBankQuestions = trpc.tutor.teacher.listTeacherPracticeQuestions.useQuery(
+    selectedContentUnit ? { grade: selectedContentUnit.grade, unitKey: selectedContentUnit.unitKey } : undefined,
+    { enabled: isAuthenticated && canManage && !!selectedContentUnit },
+  );
+  const teacherBankQuestionRows = (teacherBankQuestions.data ?? []) as TeacherPracticeQuestion[];
 
   useEffect(() => { setContentUnitValue(`${grade}:${unitKey}`); }, [grade, unitKey]);
   useEffect(() => { if (batchSettings.data?.maxBatchQuestions === 10) setBatchLimit(10); }, [batchSettings.data?.maxBatchQuestions]);
@@ -108,8 +124,25 @@ export default function TeacherWorkspaceNext() {
       toast.success("已直接加入題庫，不經過 Gemini；下次符合條件的學生出題就可能領到這一題。", { icon: <Check className="size-4" /> });
       setBankQuestionText(""); setBankKeyConcept(""); setBankDifficultyNote("");
       void bankStats.refetch();
+      void teacherBankQuestions.refetch();
     },
     onError: error => toast.error(error.message || "加入題庫失敗，請稍後再試。"),
+  });
+  const importPracticeQuestions = trpc.tutor.teacher.importPracticeQuestions.useMutation({
+    onSuccess: result => {
+      setBankImportResult(result);
+      setBankImportFile(null);
+      toast.success(result.skipped.length
+        ? `已匯入 ${result.imported} 題，${result.skipped.length} 行未匯入（詳見下方清單）。`
+        : `已匯入 ${result.imported} 題，全部成功。`, { icon: <Check className="size-4" /> });
+      void bankStats.refetch();
+      void teacherBankQuestions.refetch();
+    },
+    onError: error => { setBankImportResult(null); toast.error(error.message || "題目檔案匯入失敗，請稍後再試。"); },
+  });
+  const deleteTeacherBankQuestion = trpc.tutor.teacher.deleteTeacherPracticeQuestion.useMutation({
+    onSuccess: () => { toast.success("已從題庫移除這一題。"); void bankStats.refetch(); void teacherBankQuestions.refetch(); },
+    onError: error => toast.error(error.message || "刪除失敗，請稍後再試。"),
   });
   const upsertMode = trpc.tutor.teacher.upsertMode.useMutation({
     onSuccess: (_, variables) => { toast.success(variables.createOnly ? "已建立解題模式草稿；核准後學生即可選擇。" : "解題模式已儲存並建立版本。"); setIsNewMode(false); void modes.refetch(); },
@@ -191,6 +224,22 @@ export default function TeacherWorkspaceNext() {
       keyConcept: bankKeyConcept.trim(), difficultyNote: bankDifficultyNote.trim(),
     });
   };
+  const importBankQuestions = async () => {
+    if (!selectedContentUnit) return toast.error("請先選擇歸屬單元。");
+    if (!bankImportFile) return toast.error("請先選擇要匯入的題目檔案（.csv）。");
+    if (!/\.csv$/i.test(bankImportFile.name) && !["text/csv", "application/vnd.ms-excel"].includes(bankImportFile.type)) return toast.error("目前只支援 CSV 檔案；Excel 請先另存新檔為 CSV 再上傳。");
+    if (bankImportFile.size === 0 || bankImportFile.size > 1 * 1024 * 1024) return toast.error("檔案是空的，或超過 1MB 上限。");
+    setBankImportResult(null);
+    try {
+      const csvText = await readFileAsText(bankImportFile);
+      importPracticeQuestions.mutate({
+        grade: selectedContentUnit.grade, unitKey: selectedContentUnit.unitKey, unitName: selectedContentUnit.name,
+        defaultDifficulty: bankDifficulty, csvText,
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "題目檔案讀取失敗。");
+    }
+  };
   const handleLogout = async () => {
     try { await logout(); toast.success("已安全登出此裝置。"); }
     catch (error) { toast.error(error instanceof Error ? error.message : "暫時無法登出，請稍後再試。"); }
@@ -251,6 +300,42 @@ export default function TeacherWorkspaceNext() {
               <label className="grid gap-1.5 text-sm font-medium text-slate-700">關鍵觀念<span className="font-normal text-slate-400">（選填，一句話點出主要觀念，不透露解法）</span><Input value={bankKeyConcept} onChange={event => setBankKeyConcept(event.target.value)} maxLength={200} /></label>
               <label className="grid gap-1.5 text-sm font-medium text-slate-700">難度說明<span className="font-normal text-slate-400">（選填，一句話說明大概要用到幾個步驟）</span><Input value={bankDifficultyNote} onChange={event => setBankDifficultyNote(event.target.value)} maxLength={200} /></label>
               <Button type="button" onClick={submitPracticeQuestion} disabled={addPracticeQuestion.isPending || !selectedContentUnit || bankQuestionText.trim().length < 4} className="w-full rounded-xl bg-[#196b63] hover:bg-[#115950]"><PenLine className="mr-2 size-4" />{addPracticeQuestion.isPending ? "正在加入題庫…" : "直接加入題庫"}</Button>
+            </div>
+            <div className="mt-6 border-t border-slate-100 pt-5">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold tracking-[0.12em] text-[#196b63]">批次匯入</p>
+                  <h3 className="mt-1 text-base font-semibold text-[#173b4d]">用檔案一次匯入多題</h3>
+                  <p className="mt-1 text-xs leading-5 text-slate-500">上傳 CSV 檔，會匯入到上方選取的歸屬單元；每一行都是一題，同一份檔案可以混合不同難度。</p>
+                </div>
+                <FileSpreadsheet className="mt-1 size-5 shrink-0 text-[#196b63]" />
+              </div>
+              <div className="mt-4 grid gap-3">
+                <button type="button" onClick={downloadBankQuestionCsvTemplate} className="inline-flex w-fit items-center gap-1.5 rounded-full border border-dashed border-[#83c0b6] bg-[#f7fcfa] px-3 py-1.5 text-xs font-semibold text-[#196b63]"><Download className="size-3.5" />下載 CSV 範本</button>
+                <label className="grid gap-2 text-sm font-medium text-slate-700">
+                  <span>題目檔案（.csv，需為 UTF-8 編碼）</span>
+                  <Input type="file" accept="text/csv,.csv" onChange={event => { setBankImportFile(event.target.files?.[0] ?? null); setBankImportResult(null); }} />
+                  <span className="text-xs font-normal leading-5 text-slate-500">表頭建議包含「難度、題目、關鍵觀念、難度說明」；難度欄留空會套用上方目前選取的難度（{PRACTICE_DIFFICULTY_LABELS[bankDifficulty]}）。單次最多 200 題、檔案上限 1MB。</span>
+                </label>
+                {bankImportFile && <p className="truncate rounded-xl bg-[#f7f8f5] p-3 text-xs text-slate-600">{bankImportFile.name}・{Math.ceil(bankImportFile.size / 1024)} KB</p>}
+                <Button type="button" onClick={importBankQuestions} disabled={importPracticeQuestions.isPending || !selectedContentUnit || !bankImportFile} variant="outline" className="w-full rounded-xl border-[#a7d4cd] text-[#196b63]"><FileSpreadsheet className="mr-2 size-4" />{importPracticeQuestions.isPending ? "正在匯入…" : "匯入題目檔案"}</Button>
+                {bankImportResult && <div className="rounded-2xl bg-[#f7f8f5] p-4 text-xs leading-5 text-slate-600">
+                  <p className="font-semibold text-[#173b4d]">已匯入 {bankImportResult.imported} 題，共 {bankImportResult.totalRows} 行資料。</p>
+                  {bankImportResult.skipped.length > 0 && <div className="mt-2 space-y-1">
+                    <p className="font-medium text-[#9a5b21]">{bankImportResult.skipped.length} 行未匯入：</p>
+                    <ul className="max-h-32 space-y-0.5 overflow-y-auto">{bankImportResult.skipped.map(item => <li key={item.line}>第 {item.line} 行：{item.reason}</li>)}</ul>
+                  </div>}
+                </div>}
+              </div>
+            </div>
+          </section>
+          <section className="rounded-[1.5rem] border border-slate-200 bg-white p-5 shadow-sm">
+            <SectionTitle icon={<Database />} eyebrow="題庫直送" title="已加入的題庫題目" detail="這裡只列出老師手動加入或匯入的題目（不含 AI 自動出的題），依上方目前選取的單元篩選；刪除後不會影響學生已經拿到的題目。" />
+            <div className="mt-5 space-y-2">
+              {!selectedContentUnit ? <p className="rounded-xl bg-[#f7f8f5] p-3 text-xs leading-5 text-slate-500">請先在上方選擇歸屬單元。</p>
+                : teacherBankQuestions.isLoading ? <Loading label="讀取題庫題目…" />
+                : teacherBankQuestionRows.length ? <div className="max-h-96 space-y-2 overflow-y-auto pr-1">{teacherBankQuestionRows.map(item => <article key={item.id} className="rounded-xl border border-slate-100 p-3"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="text-sm text-slate-700">{item.questionText}</p>{item.keyConcept && <p className="mt-1 text-xs text-slate-400">關鍵觀念：{item.keyConcept}</p>}</div><div className="flex shrink-0 items-center gap-2"><span className="rounded-full bg-[#eaf6f3] px-2 py-1 text-[11px] font-medium text-[#125d55]">{PRACTICE_DIFFICULTY_LABELS[item.difficulty]}</span><button type="button" onClick={() => { if (window.confirm("確定要從題庫刪除這一題嗎？此動作無法復原。")) deleteTeacherBankQuestion.mutate({ id: item.id }); }} disabled={deleteTeacherBankQuestion.isPending} className="rounded-full p-1.5 text-slate-400 hover:bg-[#f7ddd5] hover:text-[#9a4331]"><Trash2 className="size-4" /></button></div></div></article>)}</div>
+                : <p className="rounded-xl bg-[#f7f8f5] p-3 text-xs leading-5 text-slate-500">這個單元目前還沒有老師手動加入或匯入的題目。</p>}
             </div>
           </section>
           <section className="rounded-[1.5rem] border border-slate-200 bg-white p-5 shadow-sm"><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-semibold tracking-[0.12em] text-[#196b63]">背景補題排程</p><h2 className="mt-1 text-xl font-semibold tracking-tight text-[#173b4d]">練習題庫存量</h2><p className="mt-1 text-xs leading-5 text-slate-500">學生出題會優先從這裡秒回，庫存不足時才即時呼叫 Gemini。正式環境依 Vercel cron／GitHub Actions 排程自動補題，這裡的按鈕僅供立即手動補題（例如上線前預熱）。</p></div><Database className="mt-1 size-5 text-[#196b63]" /></div>
