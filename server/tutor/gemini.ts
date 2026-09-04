@@ -2,6 +2,20 @@ import { GoogleGenAI } from "@google/genai";
 
 export const GEMINI_TUTOR_MODEL = "gemini-3.6-flash";
 
+/**
+ * Google 免費層的 RPM／每日配額是「每個模型各自獨立」計算的，不是整個專案共用一個
+ * 額度池——這也是為什麼把出題改成批次呼叫（見 practiceGeneration.ts）能省配額，
+ * 但省的是同一個模型的配額，多個學生同時解題／出題、加上背景補題排程全部共用
+ * gemini-3.6-flash 這唯一一個模型時，還是很容易撞到同一個池子的上限。
+ * gemini-3.7-flash 是獨立的模型、有自己的一份免費配額，一旦 3.6 撞到 429／配額
+ * 用盡這類「換個模型就能繼續」的錯誤，MODEL_FALLBACK_CHAIN 會讓同一次呼叫立刻
+ * 改用 3.7 重試一次，等於把當下可用的免費額度直接翻倍，而不是讓學生乾等或直接
+ * 看到「系統忙碌」。若之後 Google 免費層開放更多模型，只要照順序加進這個陣列即可，
+ * 不需要更動下面的呼叫邏輯。
+ */
+export const GEMINI_TUTOR_FALLBACK_MODEL = "gemini-3.7-flash";
+const MODEL_FALLBACK_CHAIN = [GEMINI_TUTOR_MODEL, GEMINI_TUTOR_FALLBACK_MODEL] as const;
+
 export type GeminiInlineImage = {
   data: string;
   mimeType: "image/jpeg" | "image/png" | "image/webp" | "application/pdf";
@@ -62,6 +76,19 @@ function getRetryAfterSeconds(error: unknown) {
 function isTransientProviderError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error ?? "");
   return /\b429\b|RESOURCE_EXHAUSTED|\b503\b|UNAVAILABLE|\b408\b|timeout|aborted|AbortError/i.test(message);
+}
+
+/**
+ * 只挑出「換個模型就有機會繼續」的錯誤：對方明確拒絕（429 配額/頻率限制、503
+ * 服務過載），這類錯誤幾乎都是立即回應、不會卡住等待，換下一個模型重試的額外
+ * 延遲很小。刻意不包含逾時／主動中止（408、timeout、aborted）：那類錯誤代表
+ * 這次呼叫本身已經吃掉大部分時間預算，換模型再等一次容易讓總延遲翻倍、逼近或
+ * 超過呼叫端（見 practiceGeneration.ts）自己算好的時間預算，也可能撞上 Vercel
+ * 的函式執行時間上限，所以那類錯誤維持原本行為，直接往外拋給呼叫端的重試邏輯。
+ */
+function isRateLimitOrOutageError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /\b429\b|RESOURCE_EXHAUSTED|\b503\b|UNAVAILABLE/i.test(message);
 }
 
 /**
@@ -132,18 +159,13 @@ function getGeminiClient(purpose: "solve" | "material" = "solve") {
   return client;
 }
 
-/**
- * 只在伺服器執行的 Gemini 結構化輸出封裝。呼叫者不得把 API 金鑰或
- * Supabase 簽名網址傳入瀏覽器；圖片或 PDF 以已授權讀取後的 inline bytes 提供。
- */
-export async function generateGeminiJson(request: GeminiStructuredRequest): Promise<string> {
-  // 只在有設定 timeoutMs 時才建立 AbortController：呼叫方（例如即時解題）若沒有
-  // 明確的時間預算考量，維持原本「完全交給 Gemini 決定」的行為，不改變既有時序。
+/** 對單一模型送出一次請求；逾時／中止的處理保持不變，每個模型各自有獨立的 AbortController。 */
+async function requestFromModel(model: string, request: GeminiStructuredRequest): Promise<string> {
   const controller = request.timeoutMs ? new AbortController() : undefined;
   const timer = controller ? setTimeout(() => controller.abort(new Error(`Gemini 請求超過自訂逾時 ${request.timeoutMs}ms，主動中止。`)), request.timeoutMs) : undefined;
   try {
     const response = await getGeminiClient(request.purpose ?? "solve").models.generateContent({
-      model: GEMINI_TUTOR_MODEL,
+      model,
       contents: [{
         role: "user",
         parts: [
@@ -168,15 +190,36 @@ export async function generateGeminiJson(request: GeminiStructuredRequest): Prom
     });
     if (!response.text) throw new Error("Gemini 未傳回可解析的內容。");
     return repairBrokenJsonEscapes(response.text);
-  } catch (error) {
-    console.error("Gemini tutor request failed", {
-      message: error instanceof Error ? error.message : "unknown error",
-    });
-    if (isTransientProviderError(error)) {
-      throw new GeminiTemporaryUnavailableError(getRetryAfterSeconds(error), isDailyQuotaExhaustedProviderError(error));
-    }
-    throw new Error("解題服務暫時無法完成這次處理，請稍後再試。");
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+/**
+ * 只在伺服器執行的 Gemini 結構化輸出封裝。呼叫者不得把 API 金鑰或
+ * Supabase 簽名網址傳入瀏覽器；圖片或 PDF 以已授權讀取後的 inline bytes 提供。
+ */
+export async function generateGeminiJson(request: GeminiStructuredRequest): Promise<string> {
+  let lastError: unknown;
+  for (let i = 0; i < MODEL_FALLBACK_CHAIN.length; i += 1) {
+    const model = MODEL_FALLBACK_CHAIN[i];
+    const isLastModel = i === MODEL_FALLBACK_CHAIN.length - 1;
+    try {
+      return await requestFromModel(model, request);
+    } catch (error) {
+      lastError = error;
+      console.error("Gemini tutor request failed", {
+        model, message: error instanceof Error ? error.message : "unknown error",
+      });
+      // 只有「換模型就有機會繼續」的錯誤才會嘗試下一個模型（見 isRateLimitOrOutageError
+      // 上方註解）；其餘錯誤（逾時、中止、金鑰未設定等）直接跳出迴圈，用這次的錯誤
+      // 走下面既有的分類與轉換邏輯，不浪費時間再打一次注定失敗或代價太高的請求。
+      if (isLastModel || !isRateLimitOrOutageError(error)) break;
+      console.error(`Gemini model ${model} rate-limited/unavailable, falling back to ${MODEL_FALLBACK_CHAIN[i + 1]}`);
+    }
+  }
+  if (isTransientProviderError(lastError)) {
+    throw new GeminiTemporaryUnavailableError(getRetryAfterSeconds(lastError), isDailyQuotaExhaustedProviderError(lastError));
+  }
+  throw new Error("解題服務暫時無法完成這次處理，請稍後再試。");
 }
