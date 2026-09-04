@@ -3,8 +3,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { trpc } from "@/lib/trpc";
-import { CORE_UNITS, GRADE_LABELS, PRACTICE_DIFFICULTY_LABELS, type Grade } from "../../../shared/mathCurriculum";
-import { AlertTriangle, ArrowLeft, BadgeCheck, BookOpenCheck, Check, ClipboardCheck, Database, FilePlus2, FileUp, GraduationCap, Layers3, Loader2, LogOut, Plus, RefreshCw, Save, SlidersHorizontal } from "lucide-react";
+import { CORE_UNITS, GRADE_LABELS, PRACTICE_DIFFICULTIES, PRACTICE_DIFFICULTY_LABELS, type Grade, type PracticeDifficulty } from "../../../shared/mathCurriculum";
+import { AlertTriangle, ArrowLeft, BadgeCheck, BookOpenCheck, Check, ClipboardCheck, Database, FilePlus2, FileUp, GraduationCap, Layers3, Loader2, LogOut, PenLine, Plus, RefreshCw, Save, SlidersHorizontal } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Link } from "wouter";
@@ -51,6 +51,10 @@ export default function TeacherWorkspaceNext() {
   const [materialFiles, setMaterialFiles] = useState<File[]>([]);
   const [materialApproved, setMaterialApproved] = useState(true);
   const [batchLimit, setBatchLimit] = useState<5 | 10>(5);
+  const [bankDifficulty, setBankDifficulty] = useState<PracticeDifficulty>("standard");
+  const [bankQuestionText, setBankQuestionText] = useState("");
+  const [bankKeyConcept, setBankKeyConcept] = useState("");
+  const [bankDifficultyNote, setBankDifficultyNote] = useState("");
 
   const units = trpc.tutor.teacher.listUnits.useQuery(undefined, { enabled: isAuthenticated && canManage });
   const contents = trpc.tutor.teacher.listContents.useQuery(undefined, { enabled: isAuthenticated && canManage });
@@ -98,6 +102,14 @@ export default function TeacherWorkspaceNext() {
   const addContent = trpc.tutor.teacher.addApprovedContent.useMutation({
     onSuccess: () => { toast.success("教材內容已加入指定單元。", { icon: <Check className="size-4" /> }); setContentTitle(""); setContentBody(""); void units.refetch(); void contents.refetch(); },
     onError: error => toast.error(error.message),
+  });
+  const addPracticeQuestion = trpc.tutor.teacher.addPracticeQuestion.useMutation({
+    onSuccess: () => {
+      toast.success("已直接加入題庫，不經過 Gemini；下次符合條件的學生出題就可能領到這一題。", { icon: <Check className="size-4" /> });
+      setBankQuestionText(""); setBankKeyConcept(""); setBankDifficultyNote("");
+      void bankStats.refetch();
+    },
+    onError: error => toast.error(error.message || "加入題庫失敗，請稍後再試。"),
   });
   const upsertMode = trpc.tutor.teacher.upsertMode.useMutation({
     onSuccess: (_, variables) => { toast.success(variables.createOnly ? "已建立解題模式草稿；核准後學生即可選擇。" : "解題模式已儲存並建立版本。"); setIsNewMode(false); void modes.refetch(); },
@@ -170,6 +182,15 @@ export default function TeacherWorkspaceNext() {
       toast.error(error instanceof Error ? error.message : "教材檔案匯入失敗。");
     }
   };
+  const submitPracticeQuestion = () => {
+    if (!selectedContentUnit) return toast.error("請先選擇歸屬單元。");
+    if (bankQuestionText.trim().length < 4) return toast.error("請輸入完整的題目內容。");
+    addPracticeQuestion.mutate({
+      grade: selectedContentUnit.grade, unitKey: selectedContentUnit.unitKey, unitName: selectedContentUnit.name,
+      difficulty: bankDifficulty, questionText: bankQuestionText.trim(),
+      keyConcept: bankKeyConcept.trim(), difficultyNote: bankDifficultyNote.trim(),
+    });
+  };
   const handleLogout = async () => {
     try { await logout(); toast.success("已安全登出此裝置。"); }
     catch (error) { toast.error(error instanceof Error ? error.message : "暫時無法登出，請稍後再試。"); }
@@ -221,6 +242,17 @@ export default function TeacherWorkspaceNext() {
         <div className="space-y-6">
           <section className="rounded-[1.5rem] border border-slate-200 bg-white p-5 shadow-sm"><div className="flex items-center justify-between"><div><p className="text-xs font-semibold tracking-[0.12em] text-[#196b63]">核准資料庫</p><h2 className="mt-1 text-xl font-semibold tracking-tight text-[#173b4d]">教材與規則狀態</h2></div><BadgeCheck className="size-6 text-[#196b63]" /></div><div className="mt-5 space-y-3">{units.isLoading || contents.isLoading ? <Loading label="讀取中…" /> : <><div className="rounded-2xl bg-[#f7f8f5] p-4"><p className="text-xs text-slate-500">已建立單元規則</p><p className="mt-1 text-2xl font-semibold text-[#173b4d]">{unitRows.length}<span className="ml-1 text-sm font-normal text-slate-400">個</span></p></div>{unitRows.slice(0, 5).map(item => <article key={item.id} className="rounded-xl border border-slate-100 p-3"><div className="flex items-start justify-between gap-3"><div><p className="text-sm font-semibold text-slate-700">{GRADE_LABELS[item.grade]}・{item.name}</p><p className="mt-1 text-xs text-slate-400">代碼 {item.unitKey}・版本 v{item.version}</p></div><span className={`rounded-full px-2 py-1 text-[11px] ${item.isApproved ? "bg-[#e5f3f0] text-[#196b63]" : "bg-[#fff3e6] text-[#9a5b21]"}`}>{item.isApproved ? "已核准" : "草稿"}</span></div></article>)}{!unitRows.length && <p className="rounded-xl bg-[#f7f8f5] p-3 text-xs leading-5 text-slate-500">請先建立至少一個單元規則，才能加入對應教材。</p>}<div className="border-t border-slate-100 pt-3"><p className="text-xs text-slate-500">已加入教材內容</p><p className="mt-1 text-lg font-semibold text-[#173b4d]">{contents.data?.length || 0} <span className="text-xs font-normal text-slate-400">筆</span></p></div></>}</div></section>
           <section className="rounded-[1.5rem] border border-slate-200 bg-white p-5 shadow-sm"><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-semibold tracking-[0.12em] text-[#9a5b21]">品質檢查</p><h2 className="mt-1 text-xl font-semibold tracking-tight text-[#173b4d]">學生回報案件</h2><p className="mt-1 text-xs leading-5 text-slate-500">案件從 Supabase 讀取，更新會直接寫回案件狀態。</p></div><AlertTriangle className="mt-1 size-5 text-[#c77948]" /></div><div className="mt-5 space-y-3">{escalations.isLoading ? <Loading label="讀取案件…" /> : caseRows.length ? caseRows.map(item => <article key={item.id} className="rounded-2xl border border-[#f0e0c5] bg-[#fffdfa] p-4"><div className="flex items-start justify-between gap-3"><div><p className="text-sm font-semibold text-slate-700">學生案件・{reasonLabel(item.reason)}</p><p className="mt-1 text-xs leading-5 text-slate-500">{item.detail || "學生未提供額外說明。"}</p></div><span className={`rounded-full px-2 py-1 text-[11px] ${item.priority === "high" ? "bg-[#f7ddd5] text-[#9a4331]" : "bg-[#f8edd6] text-[#9a5b21]"}`}>{item.priority === "high" ? "優先" : "一般"}</span></div><div className="mt-3 flex flex-wrap gap-2">{(["new", "reviewing", "resolved"] as const).map(status => <button type="button" key={status} disabled={updateCase.isPending} onClick={() => updateCase.mutate({ id: item.id, status })} className={`rounded-full px-2.5 py-1 text-[11px] ${item.status === status ? "bg-[#173b4d] text-white" : "bg-white text-slate-500 ring-1 ring-slate-200"}`}>{status === "new" ? "待處理" : status === "reviewing" ? "檢查中" : "已結案"}</button>)}</div></article>) : <div className="rounded-2xl bg-[#f7f8f5] p-4 text-sm leading-6 text-slate-500"><ClipboardCheck className="mb-2 size-5 text-[#a5cfc8]" />目前沒有學生回報案件。</div>}</div></section>
+          <section className="rounded-[1.5rem] border border-slate-200 bg-white p-5 shadow-sm">
+            <SectionTitle icon={<PenLine />} eyebrow="題庫直送" title="直接建立題庫題目" detail="原封不動存進題庫，完全不經過 Gemini 改寫；跟自動出題共用同一個池子，之後學生出題可能直接領到這一題。" />
+            <div className="mt-5 grid gap-4">
+              <label className="grid gap-1.5 text-sm font-medium text-slate-700">歸屬單元<select value={contentUnitValue} onChange={event => setContentUnitValue(event.target.value)} className="h-11 w-full rounded-xl border border-input bg-background px-3 text-sm shadow-sm">{(["seven", "eight", "nine"] as Grade[]).map(optionGrade => <optgroup key={optionGrade} label={GRADE_LABELS[optionGrade]}>{contentUnitOptions.filter(item => item.grade === optionGrade).map(item => <option key={`${item.grade}:${item.unitKey}`} value={`${item.grade}:${item.unitKey}`}>{item.name}</option>)}</optgroup>)}</select><span className="text-xs font-normal leading-5 text-slate-500">自訂單元必須先在左側「單元規則」建立並核准，才會出現在學生端與這裡的選單。</span></label>
+              <label className="grid gap-1.5 text-sm font-medium text-slate-700">難度<div className="flex gap-2">{PRACTICE_DIFFICULTIES.map(item => <button type="button" key={item} onClick={() => setBankDifficulty(item)} className={`rounded-xl border px-3 py-2 text-xs font-medium ${bankDifficulty === item ? "border-[#196b63] bg-[#eaf6f3] text-[#125d55]" : "border-slate-200 text-slate-500"}`}>{PRACTICE_DIFFICULTY_LABELS[item]}</button>)}</div></label>
+              <label className="grid gap-1.5 text-sm font-medium text-slate-700">題目內容<Textarea value={bankQuestionText} onChange={event => setBankQuestionText(event.target.value)} placeholder="直接貼上完整題目，會原封不動顯示給學生，不會被 AI 改寫或重新出題。" className="min-h-32 leading-6" maxLength={2000} /></label>
+              <label className="grid gap-1.5 text-sm font-medium text-slate-700">關鍵觀念<span className="font-normal text-slate-400">（選填，一句話點出主要觀念，不透露解法）</span><Input value={bankKeyConcept} onChange={event => setBankKeyConcept(event.target.value)} maxLength={200} /></label>
+              <label className="grid gap-1.5 text-sm font-medium text-slate-700">難度說明<span className="font-normal text-slate-400">（選填，一句話說明大概要用到幾個步驟）</span><Input value={bankDifficultyNote} onChange={event => setBankDifficultyNote(event.target.value)} maxLength={200} /></label>
+              <Button type="button" onClick={submitPracticeQuestion} disabled={addPracticeQuestion.isPending || !selectedContentUnit || bankQuestionText.trim().length < 4} className="w-full rounded-xl bg-[#196b63] hover:bg-[#115950]"><PenLine className="mr-2 size-4" />{addPracticeQuestion.isPending ? "正在加入題庫…" : "直接加入題庫"}</Button>
+            </div>
+          </section>
           <section className="rounded-[1.5rem] border border-slate-200 bg-white p-5 shadow-sm"><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-semibold tracking-[0.12em] text-[#196b63]">背景補題排程</p><h2 className="mt-1 text-xl font-semibold tracking-tight text-[#173b4d]">練習題庫存量</h2><p className="mt-1 text-xs leading-5 text-slate-500">學生出題會優先從這裡秒回，庫存不足時才即時呼叫 Gemini。正式環境依 Vercel cron／GitHub Actions 排程自動補題，這裡的按鈕僅供立即手動補題（例如上線前預熱）。</p></div><Database className="mt-1 size-5 text-[#196b63]" /></div>
             <div className="mt-5 space-y-3">
               {bankStats.isLoading ? <Loading label="讀取題庫庫存…" /> : bankStats.data?.length ? (() => {
