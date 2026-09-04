@@ -470,9 +470,29 @@ export async function insertPracticeQuestionBankItem(input: {
   const { error } = await supabase().from("practice_question_bank").insert({
     grade: input.grade, unit_key: input.unitKey, unit_label: input.unitLabel, difficulty: input.difficulty,
     question_text: input.questionText, key_concept: input.keyConcept, difficulty_note: input.difficultyNote,
-    model: input.model,
+    model: input.model, source: "auto",
   });
   fail(error, "寫入練習題庫");
+}
+
+/**
+ * 教師直接建立題庫題目，完全跳過 Gemini：寫進與自動出題完全相同的
+ * practice_question_bank，之後學生出題時會透過既有的 claim_practice_question_bank_item
+ * RPC 隨機領到（與 AI 生成的題目混在同一個池子裡，沒有特別優先或排除）。
+ * 這正是「跟現在的架構不衝突」的關鍵：不需要另外幫教師出的題做一套獨立的
+ * 學生端出題流程，出題、解題、練習紀錄追蹤全部沿用既有機制。
+ */
+export async function insertTeacherPracticeQuestionBankItem(input: {
+  grade: Grade; unitKey: string; unitLabel: string; difficulty: "intro" | "standard" | "challenge";
+  questionText: string; keyConcept: string; difficultyNote: string; createdBy: string;
+}) {
+  const { data, error } = await supabase().from("practice_question_bank").insert({
+    grade: input.grade, unit_key: input.unitKey, unit_label: input.unitLabel, difficulty: input.difficulty,
+    question_text: input.questionText, key_concept: input.keyConcept, difficulty_note: input.difficultyNote,
+    model: "teacher", source: "teacher", created_by: input.createdBy,
+  }).select("id, created_at").single();
+  fail(error, "寫入教師自建題庫題目");
+  return { id: String(data.id), createdAt: String(data.created_at) };
 }
 
 /** 讀取每個「年級＋單元＋難度」組合目前題庫的可用（尚未發放）題目數，供補題排程判斷該補哪些組合。 */
@@ -486,6 +506,22 @@ export async function getPracticeQuestionBankPoolCounts(): Promise<Array<{
     grade: row.grade as Grade, unitKey: String(row.unit_key),
     difficulty: row.difficulty as "intro" | "standard" | "challenge", availableCount: Number(row.available_count),
   }));
+}
+
+/**
+ * 讀取「年級＋單元＋難度」這個組合最近的題庫題目文字（不論是否已被領取），
+ * 供出題時提示模型避開重複題型。刻意不限定只看「尚未領取」的題目：已經領取、
+ * 發給過學生的題目一樣代表「最近出過的題型」，同樣需要避免重複。
+ */
+export async function listRecentBankQuestionTexts(input: {
+  grade: Grade; unitKey: string; difficulty: "intro" | "standard" | "challenge"; limit?: number;
+}): Promise<string[]> {
+  const { data, error } = await supabase().from("practice_question_bank")
+    .select("question_text")
+    .eq("grade", input.grade).eq("unit_key", input.unitKey).eq("difficulty", input.difficulty)
+    .order("created_at", { ascending: false }).limit(input.limit ?? 8);
+  fail(error, "讀取近期題庫題目");
+  return (data ?? []).map((row: any) => String(row.question_text));
 }
 
 export async function listPracticeQuestions(userId: string) {
