@@ -58,8 +58,17 @@ function poolCountKey(item: { grade: Grade; unitKey: string; difficulty: Practic
 }
 
 /**
- * 背景補題主流程：依「目前庫存最少的組合優先」排序，逐一為庫存不足的組合呼叫
- * Gemini 補題，直到所有組合補滿 BANK_TARGET_POOL_SIZE，或時間預算用盡為止。
+ * 同時間最多幾個補題呼叫平行進行。補題共用學生即時解題/出題的同一把
+ * GEMINI_API_KEY，並行度太高會跟學生當下的即時請求搶配額、拉高彼此的延遲；
+ * 3 是在「同一次執行盡量多補幾題」與「不過度搶占共用配額」之間的折衷值。
+ */
+const REFILL_CONCURRENCY = 3;
+
+/**
+ * 背景補題主流程：依「目前庫存最少的組合優先」排序，把所有還沒補滿的組合展開成
+ * 一份「這一題要補給哪個組合」的工作清單，用最多 REFILL_CONCURRENCY 個併發
+ * worker 平行消化，直到清單處理完或時間預算用盡為止（比完全序列快上數倍，
+ * 同一個 60 秒執行視窗內能多補好幾題，題庫更容易維持在目標庫存量）。
  *
  * 設計成可以被頻繁、重複呼叫（例如每 10～15 分鐘一次 cron，或手動觸發）：
  * 每次執行做多少算多少，題庫不會因為單次執行沒補滿就卡住——下一次執行會
@@ -91,33 +100,41 @@ export async function refillPracticeQuestionBank(options?: { timeBudgetMs?: numb
     elapsedMs: 0,
   };
 
-  for (const { combo, available } of deficits) {
-    const needed = Math.min(BANK_TARGET_POOL_SIZE - available, MAX_NEW_QUESTIONS_PER_COMBINATION_PER_RUN);
-    for (let i = 0; i < needed; i += 1) {
-      const remainingMs = TIME_BUDGET_MS - (Date.now() - startedAt);
-      if (remainingMs < MIN_REMAINING_BUDGET_MS) {
-        summary.timedOut = true;
-        summary.elapsedMs = Date.now() - startedAt;
-        return summary;
-      }
+  // 展開成扁平的工作清單：同一個組合若還缺 3 題，就會在清單裡出現 3 次獨立的工作。
+  // 用來源清單依「庫存最少優先」的順序保留，讓並行 worker 仍然大致依這個優先順序消化。
+  const tasks = deficits.flatMap(({ combo, available }) =>
+    Array.from({ length: Math.min(BANK_TARGET_POOL_SIZE - available, MAX_NEW_QUESTIONS_PER_COMBINATION_PER_RUN) }, () => combo));
 
+  let nextTaskIndex = 0;
+  let timedOut = false;
+
+  async function worker() {
+    for (;;) {
+      const taskIndex = nextTaskIndex;
+      nextTaskIndex += 1;
+      if (taskIndex >= tasks.length) return;
+
+      const remainingMs = TIME_BUDGET_MS - (Date.now() - startedAt);
+      if (remainingMs < MIN_REMAINING_BUDGET_MS) { timedOut = true; return; }
+
+      const combo = tasks[taskIndex];
       try {
         // 每次都重新讀取教師規則／核准內容：教師若在補題排程執行期間更新了單元規則，
         // 題庫裡新產生的題目應該反映最新版本，而不是沿用執行一開始快取的舊規則。
-        const context = await supabaseTeacherDb.getTutorContext(combo.grade, combo.unitKey);
+        const [context, recentQuestions] = await Promise.all([
+          supabaseTeacherDb.getTutorContext(combo.grade, combo.unitKey),
+          tutorDb.listRecentBankQuestionTexts({ grade: combo.grade, unitKey: combo.unitKey, difficulty: combo.difficulty }),
+        ]);
         const unitLabel = context.name ?? combo.unitLabel;
         const outcome = await generatePracticeQuestionWithRetry(
           {
             grade: combo.grade, unitKey: combo.unitKey, unitLabel, difficulty: combo.difficulty,
-            teacherRules: context.rules, approvedContext: context.contents,
+            teacherRules: context.rules, approvedContext: context.contents, recentQuestions,
           },
           { timeBudgetMs: Math.max(MIN_REMAINING_BUDGET_MS, Math.min(remainingMs - 2_000, 30_000)) },
         );
 
-        if (!outcome.ok) {
-          summary.questionsFailed += 1;
-          continue;
-        }
+        if (!outcome.ok) { summary.questionsFailed += 1; continue; }
 
         await tutorDb.insertPracticeQuestionBankItem({
           grade: combo.grade, unitKey: combo.unitKey, unitLabel, difficulty: combo.difficulty,
@@ -135,6 +152,9 @@ export async function refillPracticeQuestionBank(options?: { timeBudgetMs?: numb
     }
   }
 
+  await Promise.all(Array.from({ length: Math.min(REFILL_CONCURRENCY, tasks.length) }, () => worker()));
+
+  summary.timedOut = timedOut;
   summary.elapsedMs = Date.now() - startedAt;
   return summary;
 }
