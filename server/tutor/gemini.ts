@@ -32,13 +32,24 @@ type GeminiStructuredRequest = {
 /** 不將供應商原始錯誤、配額或帳務資訊傳回瀏覽器。 */
 export class GeminiTemporaryUnavailableError extends Error {
   readonly retryAfterSeconds?: number;
+  /**
+   * true 代表偵測到的是「每日配額用盡」，不是單純的每分鐘（RPM）尖峰。這兩種
+   * 429 在使用者體感上都是「系統繁忙」，但可修復性完全不同：RPM 尖峰通常幾秒
+   * 到幾十秒內就會恢復，值得退避重試；每日配額用盡在同一天內不會自己恢復，
+   * 重試只會白白浪費時間預算、讓學生多等好幾秒才看到一樣的失敗結果。
+   * 呼叫端（見 practiceGeneration.ts）會依這個旗標決定要不要放棄剩餘重試次數。
+   */
+  readonly dailyQuotaExhausted: boolean;
 
-  constructor(retryAfterSeconds?: number) {
-    super(retryAfterSeconds
-      ? `解題服務暫時繁忙，請在約 ${retryAfterSeconds} 秒後再試。題目不需要重新上傳。`
-      : "解題服務暫時繁忙，請稍候再試。題目不需要重新上傳。");
+  constructor(retryAfterSeconds?: number, dailyQuotaExhausted = false) {
+    super(dailyQuotaExhausted
+      ? "今日 AI 出題／解題配額已經用完，重試無法解決，請明天再試；教師也可以改用教師工作台「題庫直送」直接上傳或建立題目，不受配額限制。"
+      : retryAfterSeconds
+        ? `解題服務暫時繁忙，請在約 ${retryAfterSeconds} 秒後再試。題目不需要重新上傳。`
+        : "解題服務暫時繁忙，請稍候再試。題目不需要重新上傳。");
     this.name = "GeminiTemporaryUnavailableError";
     this.retryAfterSeconds = retryAfterSeconds;
+    this.dailyQuotaExhausted = dailyQuotaExhausted;
   }
 }
 
@@ -51,6 +62,19 @@ function getRetryAfterSeconds(error: unknown) {
 function isTransientProviderError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error ?? "");
   return /\b429\b|RESOURCE_EXHAUSTED|\b503\b|UNAVAILABLE|\b408\b|timeout|aborted|AbortError/i.test(message);
+}
+
+/**
+ * 判斷 429 是不是「每日配額用盡」，不是單純的每分鐘尖峰。
+ * Google 免費層配額用盡時，錯誤內容通常會帶有形如
+ * `GenerateRequestsPerDayPerProjectPerModel-FreeTier` 的 quotaId，或直接提到
+ * "PerDay" ／ "daily"；這類錯誤幾乎不會同時帶有合理的 retryDelay（因為距離
+ * 配額重置往往是幾小時起跳，供應商不會建議「等 N 秒後重試」），單看訊息內容
+ * 就能相當可靠地跟「等幾秒就恢復」的 RPM 尖峰區分開來。
+ */
+function isDailyQuotaExhaustedProviderError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /perday|per[\s-]?day|daily quota|requests per day/i.test(message);
 }
 
 /**
@@ -148,7 +172,9 @@ export async function generateGeminiJson(request: GeminiStructuredRequest): Prom
     console.error("Gemini tutor request failed", {
       message: error instanceof Error ? error.message : "unknown error",
     });
-    if (isTransientProviderError(error)) throw new GeminiTemporaryUnavailableError(getRetryAfterSeconds(error));
+    if (isTransientProviderError(error)) {
+      throw new GeminiTemporaryUnavailableError(getRetryAfterSeconds(error), isDailyQuotaExhaustedProviderError(error));
+    }
     throw new Error("解題服務暫時無法完成這次處理，請稍後再試。");
   } finally {
     if (timer) clearTimeout(timer);
