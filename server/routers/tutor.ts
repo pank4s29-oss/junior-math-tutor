@@ -1,10 +1,11 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { CORE_UNITS, GRADES, PRACTICE_DIFFICULTIES, type Grade } from "../../shared/mathCurriculum";
+import { CORE_UNITS, GRADES, PRACTICE_DIFFICULTIES, type Grade, type PracticeDifficulty } from "../../shared/mathCurriculum";
 import { buildTutorInstructions, formatTutorReply, hasLeakedDraftArtifacts, parseTutorSolution, solutionHasLeakedDraftArtifacts, tutorResponseFormat } from "../tutor/engine";
 import { buildPracticeSheetDocx, buildPracticeSheetPdf } from "../tutor/exportDocuments";
 import { GEMINI_TUTOR_MODEL, GeminiTemporaryUnavailableError, generateGeminiJson } from "../tutor/gemini";
 import { generatePracticeQuestionWithRetry } from "../tutor/practiceGeneration";
+import { MAX_IMPORT_ROWS, parsePracticeQuestionCsv, type ParsedPracticeQuestionRow } from "../tutor/practiceQuestionImport";
 import { refillPracticeQuestionBank } from "../tutor/practiceQuestionBank";
 import * as tutorDb from "../tutor/supabaseDb";
 import * as supabaseTeacherDb from "../tutor/supabaseTeacherDb";
@@ -44,6 +45,18 @@ const materialExtractionSchema = {
 
 function resolveUnitLabel(grade: z.infer<typeof gradeSchema>, unitKey: string) {
   return CORE_UNITS[grade].find(unit => unit.key === unitKey)?.label ?? "自訂核心單元";
+}
+
+/**
+ * 教師直接寫進題庫（單題表單、CSV 批次匯入共用）的單元檢查：自訂單元必須先在
+ * 「單元規則」建立並核准，否則學生端的單元清單、補題排程的 listBankCombinations
+ * 都不會涵蓋這個代碼，題目會存進去但沒有學生端入口可以領到，等於出題石沉大海。
+ */
+async function assertApprovedPracticeUnit(grade: Grade, unitKey: string) {
+  const isCoreUnit = CORE_UNITS[grade].some(unit => unit.key === unitKey);
+  if (isCoreUnit) return;
+  const approvedUnit = await supabaseTeacherDb.getApprovedStudentUnit(grade, unitKey);
+  if (!approvedUnit) throw new TRPCError({ code: "BAD_REQUEST", message: "這個單元尚未建立並核准，請先在左側「單元規則」建立並核准此單元，再回來新增題目。" });
 }
 
 export function mergeStudentCurriculum(approvedUnits: Array<{ grade: Grade; key: string; label: string }>) {
@@ -515,19 +528,50 @@ export const tutorRouter = router({
       keyConcept: z.string().trim().max(200).optional().default(""), difficultyNote: z.string().trim().max(200).optional().default(""),
     })).mutation(async ({ ctx, input }) => {
       const appUser = await tutorDb.assertSupabaseAdmin(ctx.user);
-      const isCoreUnit = CORE_UNITS[input.grade].some(unit => unit.key === input.unitKey);
-      if (!isCoreUnit) {
-        // 自訂單元必須先在上方「單元規則」建立並核准，否則學生端的單元清單、
-        // 補題排程的 listBankCombinations 都不會涵蓋這個代碼，題目會存進去但沒有
-        // 學生端入口可以領到，等於出題石沉大海。
-        const approvedUnit = await supabaseTeacherDb.getApprovedStudentUnit(input.grade, input.unitKey);
-        if (!approvedUnit) throw new TRPCError({ code: "BAD_REQUEST", message: "這個單元尚未建立並核准，請先在左側「單元規則」建立並核准此單元，再回來新增題目。" });
-      }
+      await assertApprovedPracticeUnit(input.grade, input.unitKey);
       return tutorDb.insertTeacherPracticeQuestionBankItem({
         grade: input.grade, unitKey: input.unitKey, unitLabel: input.unitName, difficulty: input.difficulty,
         questionText: input.questionText, keyConcept: input.keyConcept, difficultyNote: input.difficultyNote,
         createdBy: appUser.id,
       });
+    }),
+    // CSV 批次匯入：解析交給 practiceQuestionImport.ts（純函式、獨立測試），這裡只負責
+    // 權限、單元核准檢查，跟依難度分組寫入。同一個檔案裡混合不同難度的題目是合法的
+    // （見 parsePracticeQuestionCsv 的難度欄），所以依難度分組後各自呼叫一次批次寫入，
+    // 而不是要求整份檔案只能是單一難度。
+    importPracticeQuestions: adminProcedure.input(z.object({
+      grade: gradeSchema, unitKey: unitKeySchema, unitName: z.string().trim().min(1).max(160),
+      defaultDifficulty: practiceDifficultySchema, csvText: z.string().min(1).max(500_000),
+    })).mutation(async ({ ctx, input }) => {
+      const appUser = await tutorDb.assertSupabaseAdmin(ctx.user);
+      await assertApprovedPracticeUnit(input.grade, input.unitKey);
+      const { rows, skipped } = parsePracticeQuestionCsv(input.csvText, input.defaultDifficulty);
+      if (!rows.length) {
+        const reason = skipped[0]?.reason ?? "請確認檔案格式是否正確（表頭需包含「題目」欄位）。";
+        throw new TRPCError({ code: "BAD_REQUEST", message: `檔案裡沒有可匯入的題目：${reason}` });
+      }
+      const grouped = new Map<PracticeDifficulty, ParsedPracticeQuestionRow[]>();
+      for (const row of rows) grouped.set(row.difficulty, [...(grouped.get(row.difficulty) ?? []), row]);
+      let imported = 0;
+      for (const [difficulty, group] of Array.from(grouped.entries())) {
+        const inserted = await tutorDb.insertTeacherPracticeQuestionBankItems({
+          grade: input.grade, unitKey: input.unitKey, unitLabel: input.unitName, difficulty, createdBy: appUser.id,
+          questions: group.map(row => ({ questionText: row.questionText, keyConcept: row.keyConcept, difficultyNote: row.difficultyNote })),
+        });
+        imported += inserted.length;
+      }
+      return { imported, skipped, totalRows: rows.length + skipped.length, maxRows: MAX_IMPORT_ROWS };
+    }),
+    // 供教師工作台列出、刪除自己（教師）手動加入或批次匯入的題庫題目；刻意限定
+    // source='teacher'，管理者不能透過這裡誤刪 AI 自動生成的題庫存貨。
+    listTeacherPracticeQuestions: adminProcedure.input(z.object({ grade: gradeSchema.optional(), unitKey: unitKeySchema.optional() }).optional()).query(async ({ ctx, input }) => {
+      await tutorDb.assertSupabaseAdmin(ctx.user);
+      return tutorDb.listTeacherPracticeQuestions(input);
+    }),
+    deleteTeacherPracticeQuestion: adminProcedure.input(z.object({ id: uuidSchema })).mutation(async ({ ctx, input }) => {
+      await tutorDb.assertSupabaseAdmin(ctx.user);
+      await tutorDb.deleteTeacherPracticeQuestion(input.id);
+      return { success: true as const };
     }),
   }),
 });
