@@ -216,6 +216,16 @@ describe("Supabase 國中數學解題路由", () => {
     expect(mocks.generatePracticeQuestionWithRetry).not.toHaveBeenCalled();
     expect(mocks.consumePracticeQuota).toHaveBeenCalledTimes(1);
   });
+  it("題庫領到的題目帶有洩漏草稿（例如反覆猶豫 \\le／\\ne 的中文草稿）時，捨棄該題並退回即時生成，不會把壞掉的內容存給學生", async () => {
+    mocks.claimPracticeQuestionFromBank.mockResolvedValue({
+      id: "bank-item-corrupted", questionText: "已知 $A=2^{20}$，其中$1\num \\ne 10改為1\node 不對，再檢查：答案是 5$", keyConcept: "科學記號", difficultyNote: "單一步驟。", model: "gemini-3.6-flash",
+    });
+    const result = await caller().generatePractice({ grade: "seven", unitKey: "linear-equations", difficulty: "intro" });
+    expect(result).toMatchObject({ practiceQuestionId: UUIDS.practice, question: "解 $x$", remaining: 29 });
+    expect(mocks.generatePracticeQuestionWithRetry).toHaveBeenCalledTimes(1);
+    expect(mocks.createPracticeQuestion).toHaveBeenCalledWith(expect.objectContaining({ source: "live" }));
+    expect(mocks.createPracticeQuestion).not.toHaveBeenCalledWith(expect.objectContaining({ source: "bank" }));
+  });
   it("題庫用盡時退回即時呼叫 Gemini 補題", async () => {
     mocks.claimPracticeQuestionFromBank.mockResolvedValue(undefined);
     const result = await caller().generatePractice({ grade: "seven", unitKey: "linear-equations", difficulty: "intro" });
