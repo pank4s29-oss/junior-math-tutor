@@ -495,6 +495,63 @@ export async function insertTeacherPracticeQuestionBankItem(input: {
   return { id: String(data.id), createdAt: String(data.created_at) };
 }
 
+/** 從檔案匯入時一次寫入多題，用同一個 insert 呼叫，避免逐題來回增加延遲與部分失敗風險。 */
+export async function insertTeacherPracticeQuestionBankItems(input: {
+  grade: Grade; unitKey: string; unitLabel: string; difficulty: "intro" | "standard" | "challenge";
+  createdBy: string;
+  questions: Array<{ questionText: string; keyConcept: string; difficultyNote: string }>;
+}) {
+  if (!input.questions.length) return [];
+  const { data, error } = await supabase().from("practice_question_bank").insert(
+    input.questions.map(question => ({
+      grade: input.grade, unit_key: input.unitKey, unit_label: input.unitLabel, difficulty: input.difficulty,
+      question_text: question.questionText, key_concept: question.keyConcept, difficulty_note: question.difficultyNote,
+      model: "teacher", source: "teacher", created_by: input.createdBy,
+    })),
+  ).select("id, created_at");
+  fail(error, "批次寫入教師自建題庫題目");
+  return (data ?? []).map((row: any) => ({ id: String(row.id), createdAt: String(row.created_at) }));
+}
+
+/** 列出教師自建（source='teacher'）的題庫題目，供教師工作台管理（編輯／刪除）用。 */
+export async function listTeacherPracticeQuestions(input?: { grade?: Grade; unitKey?: string }) {
+  let query = supabase().from("practice_question_bank")
+    .select("id, grade, unit_key, unit_label, difficulty, question_text, key_concept, difficulty_note, created_at")
+    .eq("source", "teacher").order("created_at", { ascending: false }).limit(200);
+  if (input?.grade) query = query.eq("grade", input.grade);
+  if (input?.unitKey) query = query.eq("unit_key", input.unitKey);
+  const { data, error } = await query;
+  fail(error, "讀取教師自建題庫題目");
+  return (data ?? []).map((row: any) => ({
+    id: String(row.id), grade: row.grade as Grade, unitKey: String(row.unit_key), unitLabel: String(row.unit_label),
+    difficulty: row.difficulty as "intro" | "standard" | "challenge", questionText: row.question_text,
+    keyConcept: row.key_concept, difficultyNote: row.difficulty_note, createdAt: row.created_at,
+  }));
+}
+
+/**
+ * 編輯教師自建題庫題目。刻意限定 source='teacher'：這支 API 是給教師「修正自己
+ * 打錯字或想調整用詞」用的，不應該被拿來竄改 AI 出的題目（那些應該透過重新生成
+ * 或直接刪除來處理，不是原地編輯）。
+ */
+export async function updateTeacherPracticeQuestion(input: {
+  id: string; questionText: string; keyConcept: string; difficultyNote: string; difficulty: "intro" | "standard" | "challenge";
+}) {
+  const { error, count } = await supabase().from("practice_question_bank")
+    .update({ question_text: input.questionText, key_concept: input.keyConcept, difficulty_note: input.difficultyNote, difficulty: input.difficulty })
+    .eq("id", input.id).eq("source", "teacher").select("id", { count: "exact", head: true });
+  fail(error, "更新教師自建題庫題目");
+  if (!count) throw new Error("找不到這筆教師自建題目，或這筆題目不是教師自建、無法用這支功能編輯。");
+}
+
+/** 同樣限定 source='teacher'，避免誤刪 AI 生成的題目。 */
+export async function deleteTeacherPracticeQuestion(id: string) {
+  const { error, count } = await supabase().from("practice_question_bank")
+    .delete({ count: "exact" }).eq("id", id).eq("source", "teacher");
+  fail(error, "刪除教師自建題庫題目");
+  if (!count) throw new Error("找不到這筆教師自建題目，或這筆題目不是教師自建、無法用這支功能刪除。");
+}
+
 /** 讀取每個「年級＋單元＋難度」組合目前題庫的可用（尚未發放）題目數，供補題排程判斷該補哪些組合。 */
 export async function getPracticeQuestionBankPoolCounts(): Promise<Array<{
   grade: Grade; unitKey: string; difficulty: "intro" | "standard" | "challenge"; availableCount: number;
