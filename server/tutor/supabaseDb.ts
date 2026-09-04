@@ -476,6 +476,27 @@ export async function insertPracticeQuestionBankItem(input: {
 }
 
 /**
+ * 一次寫入多題 AI 生成的題庫存貨（單一 insert 呼叫），供批次出題
+ * （practiceGeneration.ts 的 QUESTIONS_PER_CALL）一次換到多題時使用：
+ * 即時出題多換到的題目、背景補題排程單次呼叫換到的多題，都透過這支函式
+ * 一次寫入，而不是逐題呼叫 insertPracticeQuestionBankItem 來回增加延遲。
+ */
+export async function insertPracticeQuestionBankItems(input: {
+  grade: Grade; unitKey: string; unitLabel: string; difficulty: "intro" | "standard" | "challenge"; model: string;
+  questions: Array<{ questionText: string; keyConcept: string; difficultyNote: string }>;
+}) {
+  if (!input.questions.length) return;
+  const { error } = await supabase().from("practice_question_bank").insert(
+    input.questions.map(question => ({
+      grade: input.grade, unit_key: input.unitKey, unit_label: input.unitLabel, difficulty: input.difficulty,
+      question_text: question.questionText, key_concept: question.keyConcept, difficulty_note: question.difficultyNote,
+      model: input.model, source: "auto",
+    })),
+  );
+  fail(error, "批次寫入練習題庫");
+}
+
+/**
  * 教師直接建立題庫題目，完全跳過 Gemini：寫進與自動出題完全相同的
  * practice_question_bank，之後學生出題時會透過既有的 claim_practice_question_bank_item
  * RPC 隨機領到（與 AI 生成的題目混在同一個池子裡，沒有特別優先或排除）。
