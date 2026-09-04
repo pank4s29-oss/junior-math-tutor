@@ -273,11 +273,14 @@ export const tutorRouter = router({
     // 抽在 practiceGeneration.ts 的 generatePracticeQuestionWithRetry，與補題排程共用。
     let generation: { question: string; keyConcept: string; difficultyNote: string } = { question: "", keyConcept: "", difficultyNote: "" };
     try {
-      const context = await supabaseTeacherDb.getTutorContext(input.grade, input.unitKey);
+      const [context, recentQuestions] = await Promise.all([
+        supabaseTeacherDb.getTutorContext(input.grade, input.unitKey),
+        tutorDb.listRecentBankQuestionTexts({ grade: input.grade, unitKey: input.unitKey, difficulty: input.difficulty }),
+      ]);
       unitLabel = approvedCustomUnit?.label ?? context.name ?? unitLabel;
       const outcome = await generatePracticeQuestionWithRetry({
         grade: input.grade, unitKey: input.unitKey, unitLabel, difficulty: input.difficulty,
-        teacherRules: context.rules, approvedContext: context.contents,
+        teacherRules: context.rules, approvedContext: context.contents, recentQuestions,
       });
       if (outcome.ok) generation = outcome.generation;
     } catch (error) {
@@ -455,5 +458,28 @@ export const tutorRouter = router({
       return supabaseTeacherDb.uploadTeacherMaterial({ unitId, title: input.title, filename: input.filename, mimeType: input.mimeType, bytes, extractedText, isApproved: input.isApproved });
     }),
     updateEscalationStatus: adminProcedure.input(z.object({ id: uuidSchema, status: z.enum(["new", "reviewing", "resolved"]) })).mutation(async ({ ctx, input }) => { await tutorDb.assertSupabaseAdmin(ctx.user); return tutorDb.updateEscalationStatus(input); }),
+    // 教師直接手寫一題、原封不動存進題庫，完全不經過 Gemini：寫進與背景自動出題
+    // 完全相同的 practice_question_bank，之後學生出題會用既有的 claim_practice_question_bank_item
+    // RPC 隨機領到，跟 AI 出的題混在同一個池子裡——不需要另外做一套學生端流程。
+    addPracticeQuestion: adminProcedure.input(z.object({
+      grade: gradeSchema, unitKey: unitKeySchema, unitName: z.string().trim().min(1).max(160),
+      difficulty: practiceDifficultySchema, questionText: z.string().trim().min(4).max(2000),
+      keyConcept: z.string().trim().max(200).optional().default(""), difficultyNote: z.string().trim().max(200).optional().default(""),
+    })).mutation(async ({ ctx, input }) => {
+      const appUser = await tutorDb.assertSupabaseAdmin(ctx.user);
+      const isCoreUnit = CORE_UNITS[input.grade].some(unit => unit.key === input.unitKey);
+      if (!isCoreUnit) {
+        // 自訂單元必須先在上方「單元規則」建立並核准，否則學生端的單元清單、
+        // 補題排程的 listBankCombinations 都不會涵蓋這個代碼，題目會存進去但沒有
+        // 學生端入口可以領到，等於出題石沉大海。
+        const approvedUnit = await supabaseTeacherDb.getApprovedStudentUnit(input.grade, input.unitKey);
+        if (!approvedUnit) throw new TRPCError({ code: "BAD_REQUEST", message: "這個單元尚未建立並核准，請先在左側「單元規則」建立並核准此單元，再回來新增題目。" });
+      }
+      return tutorDb.insertTeacherPracticeQuestionBankItem({
+        grade: input.grade, unitKey: input.unitKey, unitLabel: input.unitName, difficulty: input.difficulty,
+        questionText: input.questionText, keyConcept: input.keyConcept, difficultyNote: input.difficultyNote,
+        createdBy: appUser.id,
+      });
+    }),
   }),
 });
