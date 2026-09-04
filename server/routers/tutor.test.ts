@@ -10,6 +10,7 @@ const UUIDS = {
 const mocks = vi.hoisted(() => ({
   generateGeminiJson: vi.fn(), getOrCreateAppUser: vi.fn(), assertSupabaseAdmin: vi.fn(), consumeSolveQuota: vi.fn(), refundSolveQuota: vi.fn(), uploadMathPhoto: vi.fn(), getAttachmentForUser: vi.fn(), downloadMathPhoto: vi.fn(), updateAttachmentRecognition: vi.fn(), createConversation: vi.fn(), getConversationForUser: vi.fn(), createMathAttempt: vi.fn(), listRecentAttempts: vi.fn(), buildLearningInsights: vi.fn(), buildPracticeSheet: vi.fn(), listPracticeHistory: vi.fn(), getAttemptForUser: vi.fn(), markAttemptAsMistake: vi.fn(), getMarkedAttemptForPractice: vi.fn(), savePracticeResult: vi.fn(), createEscalation: vi.fn(), listEscalations: vi.fn(), updateEscalationStatus: vi.fn(), getTutorContext: vi.fn(), listApprovedStudentUnits: vi.fn(), getApprovedStudentUnit: vi.fn(), listApprovedTutorModes: vi.fn(), getApprovedTutorMode: vi.fn(), getTeacherUnitByKey: vi.fn(), getTeacherTutorMode: vi.fn(), ensureTeacherUnitForContent: vi.fn(), listTeacherUnits: vi.fn(), listTeacherContents: vi.fn(), listTeacherTutorModes: vi.fn(), listTeacherMaterials: vi.fn(), upsertTeacherTutorMode: vi.fn(), upsertTeacherUnit: vi.fn(), addApprovedContent: vi.fn(), uploadTeacherMaterial: vi.fn(), getBatchQuestionLimit: vi.fn(), updateBatchQuestionLimit: vi.fn(), createBatchSession: vi.fn(), getBatchSessionForUser: vi.fn(), linkAttachmentConversationIfMissing: vi.fn(), listAttachmentsForUser: vi.fn(), renameAttachment: vi.fn(), updateAttachmentTranscriptionForUser: vi.fn(), deleteAttachmentForUser: vi.fn(), listQuotaRefundFailures: vi.fn(), resolveQuotaRefundFailure: vi.fn(),
   consumePracticeQuota: vi.fn(), refundPracticeQuota: vi.fn(), createPracticeQuestion: vi.fn(), claimPracticeQuestionFromBank: vi.fn(), getPracticeQuestionBankPoolCounts: vi.fn(), listRecentBankQuestionTexts: vi.fn(),
+  insertTeacherPracticeQuestionBankItem: vi.fn(), insertTeacherPracticeQuestionBankItems: vi.fn(), listTeacherPracticeQuestions: vi.fn(), deleteTeacherPracticeQuestion: vi.fn(),
   generatePracticeQuestionWithRetry: vi.fn(), refillPracticeQuestionBank: vi.fn(),
 }));
 
@@ -24,7 +25,7 @@ vi.mock("../tutor/gemini", () => ({
     }
   },
 }));
-vi.mock("../tutor/supabaseDb", () => ({ getOrCreateAppUser: mocks.getOrCreateAppUser, assertSupabaseAdmin: mocks.assertSupabaseAdmin, consumeSolveQuota: mocks.consumeSolveQuota, refundSolveQuota: mocks.refundSolveQuota, uploadMathPhoto: mocks.uploadMathPhoto, getAttachmentForUser: mocks.getAttachmentForUser, downloadMathPhoto: mocks.downloadMathPhoto, updateAttachmentRecognition: mocks.updateAttachmentRecognition, createConversation: mocks.createConversation, getConversationForUser: mocks.getConversationForUser, createMathAttempt: mocks.createMathAttempt, listRecentAttempts: mocks.listRecentAttempts, buildLearningInsights: mocks.buildLearningInsights, buildPracticeSheet: mocks.buildPracticeSheet, listPracticeHistory: mocks.listPracticeHistory, getAttemptForUser: mocks.getAttemptForUser, markAttemptAsMistake: mocks.markAttemptAsMistake, getMarkedAttemptForPractice: mocks.getMarkedAttemptForPractice, savePracticeResult: mocks.savePracticeResult, createEscalation: mocks.createEscalation, listEscalations: mocks.listEscalations, updateEscalationStatus: mocks.updateEscalationStatus, createBatchSession: mocks.createBatchSession, getBatchSessionForUser: mocks.getBatchSessionForUser, linkAttachmentConversationIfMissing: mocks.linkAttachmentConversationIfMissing, listAttachmentsForUser: mocks.listAttachmentsForUser, renameAttachment: mocks.renameAttachment, updateAttachmentTranscriptionForUser: mocks.updateAttachmentTranscriptionForUser, deleteAttachmentForUser: mocks.deleteAttachmentForUser, listQuotaRefundFailures: mocks.listQuotaRefundFailures, resolveQuotaRefundFailure: mocks.resolveQuotaRefundFailure, consumePracticeQuota: mocks.consumePracticeQuota, refundPracticeQuota: mocks.refundPracticeQuota, createPracticeQuestion: mocks.createPracticeQuestion, claimPracticeQuestionFromBank: mocks.claimPracticeQuestionFromBank, getPracticeQuestionBankPoolCounts: mocks.getPracticeQuestionBankPoolCounts, listRecentBankQuestionTexts: mocks.listRecentBankQuestionTexts }));
+vi.mock("../tutor/supabaseDb", () => ({ getOrCreateAppUser: mocks.getOrCreateAppUser, assertSupabaseAdmin: mocks.assertSupabaseAdmin, consumeSolveQuota: mocks.consumeSolveQuota, refundSolveQuota: mocks.refundSolveQuota, uploadMathPhoto: mocks.uploadMathPhoto, getAttachmentForUser: mocks.getAttachmentForUser, downloadMathPhoto: mocks.downloadMathPhoto, updateAttachmentRecognition: mocks.updateAttachmentRecognition, createConversation: mocks.createConversation, getConversationForUser: mocks.getConversationForUser, createMathAttempt: mocks.createMathAttempt, listRecentAttempts: mocks.listRecentAttempts, buildLearningInsights: mocks.buildLearningInsights, buildPracticeSheet: mocks.buildPracticeSheet, listPracticeHistory: mocks.listPracticeHistory, getAttemptForUser: mocks.getAttemptForUser, markAttemptAsMistake: mocks.markAttemptAsMistake, getMarkedAttemptForPractice: mocks.getMarkedAttemptForPractice, savePracticeResult: mocks.savePracticeResult, createEscalation: mocks.createEscalation, listEscalations: mocks.listEscalations, updateEscalationStatus: mocks.updateEscalationStatus, createBatchSession: mocks.createBatchSession, getBatchSessionForUser: mocks.getBatchSessionForUser, linkAttachmentConversationIfMissing: mocks.linkAttachmentConversationIfMissing, listAttachmentsForUser: mocks.listAttachmentsForUser, renameAttachment: mocks.renameAttachment, updateAttachmentTranscriptionForUser: mocks.updateAttachmentTranscriptionForUser, deleteAttachmentForUser: mocks.deleteAttachmentForUser, listQuotaRefundFailures: mocks.listQuotaRefundFailures, resolveQuotaRefundFailure: mocks.resolveQuotaRefundFailure, consumePracticeQuota: mocks.consumePracticeQuota, refundPracticeQuota: mocks.refundPracticeQuota, createPracticeQuestion: mocks.createPracticeQuestion, claimPracticeQuestionFromBank: mocks.claimPracticeQuestionFromBank, getPracticeQuestionBankPoolCounts: mocks.getPracticeQuestionBankPoolCounts, listRecentBankQuestionTexts: mocks.listRecentBankQuestionTexts, insertTeacherPracticeQuestionBankItem: mocks.insertTeacherPracticeQuestionBankItem, insertTeacherPracticeQuestionBankItems: mocks.insertTeacherPracticeQuestionBankItems, listTeacherPracticeQuestions: mocks.listTeacherPracticeQuestions, deleteTeacherPracticeQuestion: mocks.deleteTeacherPracticeQuestion }));
 vi.mock("../tutor/supabaseTeacherDb", () => ({ getTutorContext: mocks.getTutorContext, listApprovedStudentUnits: mocks.listApprovedStudentUnits, getApprovedStudentUnit: mocks.getApprovedStudentUnit, listApprovedTutorModes: mocks.listApprovedTutorModes, getApprovedTutorMode: mocks.getApprovedTutorMode, getTeacherUnitByKey: mocks.getTeacherUnitByKey, getTeacherTutorMode: mocks.getTeacherTutorMode, ensureTeacherUnitForContent: mocks.ensureTeacherUnitForContent, listTeacherUnits: mocks.listTeacherUnits, listTeacherContents: mocks.listTeacherContents, listTeacherTutorModes: mocks.listTeacherTutorModes, listTeacherMaterials: mocks.listTeacherMaterials, upsertTeacherTutorMode: mocks.upsertTeacherTutorMode, upsertTeacherUnit: mocks.upsertTeacherUnit, addApprovedContent: mocks.addApprovedContent, uploadTeacherMaterial: mocks.uploadTeacherMaterial, getBatchQuestionLimit: mocks.getBatchQuestionLimit, updateBatchQuestionLimit: mocks.updateBatchQuestionLimit }));
 vi.mock("../tutor/practiceGeneration", () => ({ generatePracticeQuestionWithRetry: mocks.generatePracticeQuestionWithRetry }));
 vi.mock("../tutor/practiceQuestionBank", () => ({ refillPracticeQuestionBank: mocks.refillPracticeQuestionBank }));
@@ -48,6 +49,10 @@ beforeEach(() => {
   mocks.getPracticeQuestionBankPoolCounts.mockResolvedValue([{ grade: "seven", unitKey: "linear-equations", difficulty: "intro", availableCount: 4 }]);
   mocks.listRecentBankQuestionTexts.mockResolvedValue([]);
   mocks.refillPracticeQuestionBank.mockResolvedValue({ combinationsChecked: 36, combinationsBelowTarget: 0, questionsGenerated: 0, questionsFailed: 0, timedOut: false, elapsedMs: 5 });
+  mocks.insertTeacherPracticeQuestionBankItem.mockResolvedValue({ id: UUIDS.practice, createdAt: "2026-09-03T00:00:00.000Z" });
+  mocks.insertTeacherPracticeQuestionBankItems.mockImplementation(async (input: { questions: unknown[] }) => input.questions.map((_, index) => ({ id: `${UUIDS.practice}-${index}`, createdAt: "2026-09-03T00:00:00.000Z" })));
+  mocks.listTeacherPracticeQuestions.mockResolvedValue([]);
+  mocks.deleteTeacherPracticeQuestion.mockResolvedValue(undefined);
   mocks.markAttemptAsMistake.mockResolvedValue({ id: UUIDS.attempt, studentMarkedWrong: true, studentMistakeNote: "移項符號", studentMarkedWrongAt: "2026-08-27T00:00:00.000Z" });
   mocks.getMarkedAttemptForPractice.mockResolvedValue({ id: UUIDS.attempt, variationQuestion: readySolution.variationQuestion });
   mocks.ensureTeacherUnitForContent.mockResolvedValue(UUIDS.unit);
@@ -264,5 +269,64 @@ describe("Supabase 國中數學解題路由", () => {
     await expect(admin.teacher.refillPracticeQuestionBank()).resolves.toMatchObject({ questionsGenerated: 0 });
     expect(mocks.refillPracticeQuestionBank).toHaveBeenCalledWith({ timeBudgetMs: 45_000 });
     await expect(caller().teacher.listPracticeQuestionBankStats()).rejects.toThrow();
+  });
+  it("教師直接新增單一題庫題目，核心單元不需要額外核准檢查", async () => {
+    const admin = adminCaller();
+    await expect(admin.teacher.addPracticeQuestion({
+      grade: "seven", unitKey: "linear-equations", unitName: "一元一次方程式", difficulty: "intro",
+      questionText: "解 $2x+5=17$，求 $x$。", keyConcept: "移項", difficultyNote: "單一步驟。",
+    })).resolves.toEqual({ id: UUIDS.practice, createdAt: "2026-09-03T00:00:00.000Z" });
+    expect(mocks.insertTeacherPracticeQuestionBankItem).toHaveBeenCalledWith(expect.objectContaining({
+      grade: "seven", unitKey: "linear-equations", difficulty: "intro", questionText: "解 $2x+5=17$，求 $x$。", createdBy: UUIDS.appUser,
+    }));
+  });
+  it("自訂單元尚未建立並核准時，教師新增題目會被拒絕", async () => {
+    mocks.getApprovedStudentUnit.mockResolvedValue(undefined);
+    await expect(adminCaller().teacher.addPracticeQuestion({
+      grade: "seven", unitKey: "custom-unit", unitName: "自訂單元", difficulty: "intro", questionText: "解 $x=1$。",
+    })).rejects.toThrow("尚未建立並核准");
+    expect(mocks.insertTeacherPracticeQuestionBankItem).not.toHaveBeenCalled();
+  });
+  it("CSV 批次匯入：依難度分組寫入，並回報略過的行數與原因", async () => {
+    const csv = [
+      "難度,題目,關鍵觀念,難度說明",
+      "入門,解 $x+1=2$，求 $x$。,移項,單一步驟。",
+      "進階,解 $2x-3=11$，求 $x$。,,",
+      "入門,太短", // 應被略過：題目太短
+    ].join("\n");
+    const result = await adminCaller().teacher.importPracticeQuestions({
+      grade: "seven", unitKey: "linear-equations", unitName: "一元一次方程式", defaultDifficulty: "standard", csvText: csv,
+    });
+    expect(result.imported).toBe(2);
+    expect(result.skipped).toEqual([{ line: 4, reason: "題目內容太短（至少需要 4 個字）或是空白。" }]);
+    expect(mocks.insertTeacherPracticeQuestionBankItems).toHaveBeenCalledTimes(2);
+    expect(mocks.insertTeacherPracticeQuestionBankItems).toHaveBeenCalledWith(expect.objectContaining({
+      difficulty: "intro", questions: [{ questionText: "解 $x+1=2$，求 $x$。", keyConcept: "移項", difficultyNote: "單一步驟。" }],
+    }));
+    expect(mocks.insertTeacherPracticeQuestionBankItems).toHaveBeenCalledWith(expect.objectContaining({
+      difficulty: "challenge", questions: [{ questionText: "解 $2x-3=11$，求 $x$。", keyConcept: "", difficultyNote: "" }],
+    }));
+  });
+  it("CSV 內容沒有可匯入的題目時，回報明確錯誤而不是靜默成功", async () => {
+    await expect(adminCaller().teacher.importPracticeQuestions({
+      grade: "seven", unitKey: "linear-equations", unitName: "一元一次方程式", defaultDifficulty: "standard", csvText: "難度,題目\n入門,x",
+    })).rejects.toThrow("檔案裡沒有可匯入的題目");
+    expect(mocks.insertTeacherPracticeQuestionBankItems).not.toHaveBeenCalled();
+  });
+  it("自訂單元尚未核准時，CSV 匯入一樣會被擋下", async () => {
+    mocks.getApprovedStudentUnit.mockResolvedValue(undefined);
+    await expect(adminCaller().teacher.importPracticeQuestions({
+      grade: "seven", unitKey: "custom-unit", unitName: "自訂單元", defaultDifficulty: "standard", csvText: "題目\n解 $x=1$。",
+    })).rejects.toThrow("尚未建立並核准");
+    expect(mocks.insertTeacherPracticeQuestionBankItems).not.toHaveBeenCalled();
+  });
+  it("教師可列出並刪除自己加入的題庫題目，非管理者被拒絕", async () => {
+    mocks.listTeacherPracticeQuestions.mockResolvedValue([{ id: UUIDS.practice, grade: "seven", unitKey: "linear-equations", unitLabel: "一元一次方程式", difficulty: "intro", questionText: "解 $x=1$。", keyConcept: "", difficultyNote: "", createdAt: "2026-09-03T00:00:00.000Z" }]);
+    const admin = adminCaller();
+    await expect(admin.teacher.listTeacherPracticeQuestions({ grade: "seven", unitKey: "linear-equations" })).resolves.toHaveLength(1);
+    await expect(admin.teacher.deleteTeacherPracticeQuestion({ id: UUIDS.practice })).resolves.toEqual({ success: true });
+    expect(mocks.deleteTeacherPracticeQuestion).toHaveBeenCalledWith(UUIDS.practice);
+    await expect(caller().teacher.listTeacherPracticeQuestions()).rejects.toThrow();
+    await expect(caller().teacher.deleteTeacherPracticeQuestion({ id: UUIDS.practice })).rejects.toThrow();
   });
 });
