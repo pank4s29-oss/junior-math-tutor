@@ -3,7 +3,7 @@ import { z } from "zod";
 import { CORE_UNITS, GRADES, PRACTICE_DIFFICULTIES, type Grade } from "../../shared/mathCurriculum";
 import { buildTutorInstructions, formatTutorReply, parseTutorSolution, solutionHasLeakedDraftArtifacts, tutorResponseFormat } from "../tutor/engine";
 import { buildPracticeSheetDocx, buildPracticeSheetPdf } from "../tutor/exportDocuments";
-import { GEMINI_TUTOR_MODEL, generateGeminiJson } from "../tutor/gemini";
+import { GEMINI_TUTOR_MODEL, GeminiTemporaryUnavailableError, generateGeminiJson } from "../tutor/gemini";
 import { generatePracticeQuestionWithRetry } from "../tutor/practiceGeneration";
 import { refillPracticeQuestionBank } from "../tutor/practiceQuestionBank";
 import * as tutorDb from "../tutor/supabaseDb";
@@ -193,13 +193,27 @@ export const tutorRouter = router({
       // 上限被平台強制中斷（那樣會回傳非 JSON 的錯誤頁，前端解析會直接失敗）。
       const solveStartedAt = Date.now();
       const SOLVE_TIME_BUDGET_MS = 40_000;
+      const SOLVE_MIN_ATTEMPT_BUDGET_MS = 9_000;
       let parsedSolution: ReturnType<typeof parseTutorSolution> | null = null;
       for (let attempt = 1; attempt <= 2; attempt += 1) {
-        if (attempt > 1 && Date.now() - solveStartedAt > SOLVE_TIME_BUDGET_MS) {
+        const solveRemainingMs = SOLVE_TIME_BUDGET_MS - (Date.now() - solveStartedAt);
+        if (attempt > 1 && solveRemainingMs < SOLVE_MIN_ATTEMPT_BUDGET_MS) {
           console.error("Solve aborted retry: time budget exceeded", { grade: input.grade, unitKey: input.unitKey, elapsedMs: Date.now() - solveStartedAt });
           break;
         }
-        content = await generateGeminiJson({ instruction, prompt, image, responseJsonSchema: tutorResponseFormat.json_schema.schema, maxOutputTokens: 3200 });
+        try {
+          content = await generateGeminiJson({ instruction, prompt, image, responseJsonSchema: tutorResponseFormat.json_schema.schema, maxOutputTokens: 3200 });
+        } catch (error) {
+          // 跟出題流程同一個修正：Gemini 免費層級 RPM 很低且整個專案共用，撞到 429
+          // 是常態；沒有 try/catch 的話例外會直接跳過整個重試迴圈，第一次撞到就
+          // 讓學生看到「系統繁忙」。這裡改成退避等待後繼續下一輪，而不是立刻放棄。
+          const isTransient = error instanceof GeminiTemporaryUnavailableError;
+          console.error(`Solve attempt ${attempt} failed`, { grade: input.grade, unitKey: input.unitKey, transient: isTransient, message: error instanceof Error ? error.message : "unknown error" });
+          if (!isTransient || attempt === 2) throw error;
+          const backoffMs = Math.min((error.retryAfterSeconds ?? 2) * 1000, Math.max(0, solveRemainingMs - SOLVE_MIN_ATTEMPT_BUDGET_MS));
+          if (backoffMs > 0) await new Promise(resolve => setTimeout(resolve, backoffMs));
+          continue;
+        }
         const parsed = parseTutorSolution(content);
         if (!solutionHasLeakedDraftArtifacts(parsed)) { parsedSolution = parsed; break; }
         console.error(`Solve attempt ${attempt} produced unusable content`, { grade: input.grade, unitKey: input.unitKey, contentPreview: content.slice(0, 500) });
