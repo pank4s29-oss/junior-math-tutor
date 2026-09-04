@@ -296,7 +296,28 @@ export const tutorRouter = router({
         grade: input.grade, unitKey: input.unitKey, unitLabel, difficulty: input.difficulty,
         teacherRules: context.rules, approvedContext: context.contents, recentQuestions,
       });
-      if (outcome.ok) generation = outcome.generation;
+      if (outcome.ok) {
+        generation = outcome.generation;
+        // 現在出題一次會跟 Gemini 換到 QUESTIONS_PER_CALL 題（見 practiceGeneration.ts），
+        // 這裡只用得到其中一題；多換到的題目直接回存題庫，等於這次「即時出題」
+        // 順手幫題庫補貨，不需要再多打一次 API。刻意 await（而不是 fire-and-forget）：
+        // Serverless 函式在回傳回應後隨時可能被平台終止，背景 Promise 不保證會跑完。
+        if (outcome.extras.length) {
+          try {
+            await tutorDb.insertPracticeQuestionBankItems({
+              grade: input.grade, unitKey: input.unitKey, unitLabel, difficulty: input.difficulty,
+              model: GEMINI_TUTOR_MODEL,
+              questions: outcome.extras.map(extra => ({ questionText: extra.question, keyConcept: extra.keyConcept, difficultyNote: extra.difficultyNote })),
+            });
+          } catch (bankError) {
+            // 補貨失敗不該讓學生看到出題失敗——這一題已經生成好了，照樣回傳給學生，只記錄錯誤。
+            console.error("Failed to bank extra practice questions from live generation", {
+              grade: input.grade, unitKey: input.unitKey, difficulty: input.difficulty,
+              message: bankError instanceof Error ? bankError.message : "unknown error",
+            });
+          }
+        }
+      }
     } catch (error) {
       await tutorDb.refundPracticeQuota(appUser.id);
       throw error;
