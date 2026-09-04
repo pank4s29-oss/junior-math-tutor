@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   getTutorContext: vi.fn(),
   getPracticeQuestionBankPoolCounts: vi.fn(),
   insertPracticeQuestionBankItem: vi.fn(),
+  listRecentBankQuestionTexts: vi.fn(),
   generatePracticeQuestionWithRetry: vi.fn(),
 }));
 
@@ -15,6 +16,7 @@ vi.mock("./supabaseTeacherDb", () => ({
 vi.mock("./supabaseDb", () => ({
   getPracticeQuestionBankPoolCounts: mocks.getPracticeQuestionBankPoolCounts,
   insertPracticeQuestionBankItem: mocks.insertPracticeQuestionBankItem,
+  listRecentBankQuestionTexts: mocks.listRecentBankQuestionTexts,
 }));
 vi.mock("./practiceGeneration", () => ({ generatePracticeQuestionWithRetry: mocks.generatePracticeQuestionWithRetry }));
 vi.mock("./gemini", () => ({ GEMINI_TUTOR_MODEL: "gemini-3.6-flash" }));
@@ -67,6 +69,7 @@ describe("refillPracticeQuestionBank", () => {
     vi.clearAllMocks();
     mocks.listApprovedStudentUnits.mockResolvedValue([]);
     mocks.getTutorContext.mockResolvedValue({ name: undefined, rules: "先確認已知條件。", contents: [] });
+    mocks.listRecentBankQuestionTexts.mockResolvedValue([]);
     mocks.insertPracticeQuestionBankItem.mockResolvedValue(undefined);
     mocks.generatePracticeQuestionWithRetry.mockResolvedValue({ ok: true, generation: CLEAN_GENERATION });
   });
