@@ -1,8 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ generateGeminiJson: vi.fn() }));
-vi.mock("./gemini", () => ({ generateGeminiJson: mocks.generateGeminiJson }));
+vi.mock("./gemini", () => ({
+  generateGeminiJson: mocks.generateGeminiJson,
+  GeminiTemporaryUnavailableError: class GeminiTemporaryUnavailableError extends Error {
+    retryAfterSeconds?: number;
+    constructor(retryAfterSeconds?: number) {
+      super(retryAfterSeconds ? `解題服務暫時繁忙，請在約 ${retryAfterSeconds} 秒後再試。` : "解題服務暫時繁忙，請稍候再試。");
+      this.retryAfterSeconds = retryAfterSeconds;
+    }
+  },
+}));
 
+import { GeminiTemporaryUnavailableError } from "./gemini";
 import { generatePracticeQuestionWithRetry } from "./practiceGeneration";
 
 const target = {
@@ -57,5 +67,26 @@ describe("generatePracticeQuestionWithRetry", () => {
   it("Gemini 呼叫本身拋出例外時原樣往外傳，不吞掉錯誤", async () => {
     mocks.generateGeminiJson.mockRejectedValueOnce(new Error("解題服務暫時繁忙，請在約 10 秒後再試。"));
     await expect(generatePracticeQuestionWithRetry(target)).rejects.toThrow("解題服務暫時繁忙");
+  });
+
+  it("撞到 429 這類暫時性錯誤時會退避後重試，而不是第一次就放棄（這是這次修正的核心行為）", async () => {
+    mocks.generateGeminiJson
+      .mockRejectedValueOnce(new GeminiTemporaryUnavailableError(0))
+      .mockResolvedValueOnce(JSON.stringify(cleanGeneration));
+    const outcome = await generatePracticeQuestionWithRetry(target);
+    expect(outcome).toEqual({ ok: true, generation: cleanGeneration });
+    expect(mocks.generateGeminiJson).toHaveBeenCalledTimes(2);
+  });
+
+  it("暫時性錯誤連續發生到用盡重試次數，才把錯誤往外拋", async () => {
+    mocks.generateGeminiJson.mockRejectedValue(new GeminiTemporaryUnavailableError(0));
+    await expect(generatePracticeQuestionWithRetry(target)).rejects.toThrow("解題服務暫時繁忙");
+    expect(mocks.generateGeminiJson).toHaveBeenCalledTimes(3);
+  });
+
+  it("非暫時性錯誤（例如金鑰未設定）不會白白浪費重試次數，第一次就直接往外拋", async () => {
+    mocks.generateGeminiJson.mockRejectedValueOnce(new Error("Gemini 解題服務尚未設定。"));
+    await expect(generatePracticeQuestionWithRetry(target)).rejects.toThrow("尚未設定");
+    expect(mocks.generateGeminiJson).toHaveBeenCalledTimes(1);
   });
 });
